@@ -10,6 +10,7 @@ CLAUDE_WORKSPACE_DIRNAME = "agent_workspace"
 FCC_LOGS_DIRNAME = "logs"
 SERVER_LOG_FILENAME = "server.log"
 CODEX_MODEL_CATALOG_FILENAME = "codex-model-catalog.json"
+ACCESS_STATE_FILENAME = "access.json"
 
 
 def config_dir_path() -> Path:
@@ -50,3 +51,9 @@ def codex_model_catalog_path() -> Path:
     """Return the generated Codex model catalog path."""
 
     return config_dir_path() / CODEX_MODEL_CATALOG_FILENAME
+
+
+def access_state_path() -> Path:
+    """Return the admin access/session/API-key state path."""
+
+    return config_dir_path() / ACCESS_STATE_FILENAME

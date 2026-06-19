@@ -28,15 +28,17 @@ Start the local FCC server from this repo:
 free-codex
 ```
 
+Or you just modify the .bashrc or .zshrc to add the repo scripts to your PATH, then run `free-codex` from anywhere.
+
 ### 2. Open the local Admin UI
 
 Open the local Admin UI in your browser after the server starts. From there:
 
-1. Copy the Codex `config.toml` snippet.
+1. Copy the Codex `config.toml` snippet in `Access` tab
 2. Download the Codex model catalog.
 3. Paste the config into your Codex config file.
 4. Put the downloaded model catalog in your Codex home, usually `~/.codex/codex-model-catalog.json`.
-
+`
 ### 3. Choose one authentication approach
 
 FCC supports two ways to authenticate Codex clients:
@@ -46,7 +48,7 @@ FCC supports two ways to authenticate Codex clients:
 Use this when you want Codex to authenticate with the same FCC server key you already trust.
 
 1. In the Admin UI, copy the Codex `config.toml` snippet for the FCC provider.
-2. Make sure the `api_key` in that snippet matches your FCC server auth key.
+2. Make sure the `env_key` in that snippet matches your FCC server auth key.
 3. Save the snippet in your Codex `config.toml`.
 
 #### Option B: Use a normal API key value directly in `config.toml`
@@ -116,3 +118,8 @@ base_url = "http://127.0.0.1:8082/v1"
 env_key = "FREE_CODEX_KEY"
 wire_api = "responses"
 ```
+
+
+# Tips:
+
+You better clone the `config.toml` file in `~/.codex/config.toml` to `~/.codex/<your custom name>.config.toml`, then pasted the snippet from the Admin UI into that file. Then you can run Codex with `codex --config <your custom name>.config.toml` to avoid overwriting your main config file.

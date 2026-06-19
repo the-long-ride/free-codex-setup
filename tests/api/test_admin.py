@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -10,10 +11,19 @@ from api.admin_config import MASKED_SECRET
 from api.admin_urls import local_admin_url
 from api.app import create_app
 from config.settings import Settings
+from config.settings import get_settings as get_cached_settings
+from core.codex_config import default_codex_model_catalog_path
 
 
 def _local_client(app):
     return TestClient(app, client=("127.0.0.1", 50000))
+
+
+def _admin_client(app):
+    client = _local_client(app)
+    response = client.post("/admin/api/login", json={"password": "1"})
+    assert response.status_code == 200
+    return client
 
 
 def _set_home(monkeypatch, tmp_path: Path) -> None:
@@ -44,16 +54,203 @@ def test_admin_page_is_loopback_only(monkeypatch, tmp_path):
     _set_home(monkeypatch, tmp_path)
     app = create_app(lifespan_enabled=False)
 
-    assert _local_client(app).get("/admin").status_code == 200
+    assert _local_client(app).get("/admin/login").status_code == 200
     remote_client = TestClient(app, client=("203.0.113.10", 50000))
     assert remote_client.get("/admin").status_code == 403
+
+
+def test_admin_page_redirects_to_login_when_not_authenticated(monkeypatch, tmp_path):
+    _set_home(monkeypatch, tmp_path)
+    app = create_app(lifespan_enabled=False)
+
+    response = _local_client(app).get("/admin", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/admin/login"
+
+
+def test_admin_page_shows_full_app_when_authenticated(monkeypatch, tmp_path):
+    _set_home(monkeypatch, tmp_path)
+    app = create_app(lifespan_enabled=False)
+    client = _admin_client(app)
+
+    response = client.get("/admin")
+
+    assert response.status_code == 200
+    assert 'id="adminViews"' in response.text
+    assert 'id="modelVisibilitySearch"' in response.text
+    assert 'id="loginForm"' not in response.text
+
+
+def test_admin_login_page_redirects_home_when_authenticated(monkeypatch, tmp_path):
+    _set_home(monkeypatch, tmp_path)
+    app = create_app(lifespan_enabled=False)
+    client = _admin_client(app)
+
+    response = client.get("/admin/login", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/admin"
+
+
+def test_admin_assets_disable_caching(monkeypatch, tmp_path):
+    _set_home(monkeypatch, tmp_path)
+    app = create_app(lifespan_enabled=False)
+    client = _local_client(app)
+
+    response = client.get("/admin/assets/admin.js")
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_admin_login_session_required_for_config_api(monkeypatch, tmp_path):
+    _set_home(monkeypatch, tmp_path)
+    app = create_app(lifespan_enabled=False)
+    client = _local_client(app)
+
+    assert client.get("/admin/api/config").status_code == 401
+
+    login = client.post("/admin/api/login", json={"password": "1"})
+    assert login.status_code == 200
+    assert login.json()["authenticated"] is True
+
+    config = client.get("/admin/api/config")
+    assert config.status_code == 200
+    assert "fields" in config.json()
+
+
+def test_admin_can_change_password_and_old_password_stops_working(
+    monkeypatch, tmp_path
+):
+    _set_home(monkeypatch, tmp_path)
+    app = create_app(lifespan_enabled=False)
+    client = _local_client(app)
+
+    assert client.post("/admin/api/login", json={"password": "1"}).status_code == 200
+    response = client.post(
+        "/admin/api/access/password",
+        json={"current_password": "1", "new_password": "new-pass"},
+    )
+    assert response.status_code == 200
+    assert response.json()["updated"] is True
+
+    assert client.get("/admin/api/config").status_code == 401
+    assert client.post("/admin/api/login", json={"password": "1"}).status_code == 401
+    assert (
+        client.post("/admin/api/login", json={"password": "new-pass"}).status_code
+        == 200
+    )
+
+
+def test_admin_access_model_visibility(monkeypatch, tmp_path):
+    _set_home(monkeypatch, tmp_path)
+    app = create_app(lifespan_enabled=False)
+    client = _local_client(app)
+    assert client.post("/admin/api/login", json={"password": "1"}).status_code == 200
+
+    access = client.get("/admin/api/access")
+    assert access.status_code == 200
+    body = access.json()
+    assert "api_keys" not in body
+    assert body["model_visibility_configured"] is False
+    assert body["visible_model_ids"] == []
+    assert all(item["enabled"] is True for item in body["available_models"])
+    model_ids = [item["id"] for item in body["available_models"]]
+    assert model_ids
+
+    selected = model_ids[:1]
+    visibility = client.post(
+        "/admin/api/access/model-visibility",
+        json={"model_ids": selected},
+    )
+    assert visibility.status_code == 200
+    assert visibility.json()["visible_model_ids"] == sorted(selected)
+
+    cleared = client.post("/admin/api/access/model-visibility", json={"model_ids": []})
+    assert cleared.status_code == 200
+    assert cleared.json()["visible_model_ids"] == []
+
+    after_clear = client.get("/admin/api/access")
+    assert after_clear.status_code == 200
+    cleared_body = after_clear.json()
+    assert cleared_body["model_visibility_configured"] is True
+    assert all(item["enabled"] is False for item in cleared_body["available_models"])
+
+
+def test_admin_access_codex_config_and_model_catalog(monkeypatch, tmp_path):
+    _set_home(monkeypatch, tmp_path)
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "server-env-key")
+    get_cached_settings.cache_clear()
+    app = create_app(lifespan_enabled=False)
+    client = _local_client(app)
+    assert client.post("/admin/api/login", json={"password": "1"}).status_code == 200
+
+    access = client.get("/admin/api/access")
+    assert access.status_code == 200
+    model_ids = [
+        item["id"]
+        for item in access.json()["available_models"]
+        if item["id"].startswith("anthropic/")
+    ]
+    assert model_ids
+
+    selected_model_ids = model_ids[:1]
+    visibility = client.post(
+        "/admin/api/access/model-visibility",
+        json={"model_ids": selected_model_ids},
+    )
+    assert visibility.status_code == 200
+
+    codex_config = client.get("/admin/api/access/codex-config")
+    assert codex_config.status_code == 200
+    codex_payload = codex_config.json()
+    assert codex_payload["auth_source"] == "env_key"
+    assert 'model_provider = "fcc"' in codex_payload["snippet"]
+    assert 'name = "Free Claude Code"' in codex_payload["snippet"]
+    assert 'base_url = "http://127.0.0.1:8082/v1"' in codex_payload["snippet"]
+    assert 'api_key = "server-env-key"' in codex_payload["snippet"]
+    assert 'api_key = "$FREE_CODEX_KEY"' not in codex_payload["snippet"]
+    assert 'wire_api = "responses"' in codex_payload["snippet"]
+    assert (
+        f"model_catalog_json = {json.dumps(default_codex_model_catalog_path())}"
+        in codex_payload["snippet"]
+    )
+
+    catalog_response = client.get("/admin/api/access/model-catalog")
+    assert catalog_response.status_code == 200
+    assert (
+        catalog_response.headers["content-disposition"]
+        == 'attachment; filename="codex-model-catalog.json"'
+    )
+    catalog = catalog_response.json()
+    assert [model["slug"] for model in catalog["models"]] == [
+        model_id.removeprefix("anthropic/") for model_id in selected_model_ids
+    ]
+    assert catalog["models"][0]["display_name"].startswith("Nvidia Nim - ")
+    assert "/" not in catalog["models"][0]["display_name"]
+
+
+def test_admin_generated_api_key_routes_are_removed(monkeypatch, tmp_path):
+    _set_home(monkeypatch, tmp_path)
+    app = create_app(lifespan_enabled=False)
+    client = _local_client(app)
+    assert client.post("/admin/api/login", json={"password": "1"}).status_code == 200
+
+    create_response = client.post(
+        "/admin/api/access/api-keys", json={"label": "removed"}
+    )
+    assert create_response.status_code == 404
+
+    delete_response = client.delete("/admin/api/access/api-keys/removed")
+    assert delete_response.status_code == 404
 
 
 def test_admin_page_no_longer_renders_generated_env_panel(monkeypatch, tmp_path):
     _set_home(monkeypatch, tmp_path)
     app = create_app(lifespan_enabled=False)
 
-    response = _local_client(app).get("/admin")
+    response = _admin_client(app).get("/admin")
 
     assert response.status_code == 200
     assert "Generated Env" not in response.text
@@ -64,7 +261,7 @@ def test_admin_page_no_longer_renders_global_status_header(monkeypatch, tmp_path
     _set_home(monkeypatch, tmp_path)
     app = create_app(lifespan_enabled=False)
 
-    response = _local_client(app).get("/admin")
+    response = _admin_client(app).get("/admin")
 
     assert response.status_code == 200
     assert "Local Admin" not in response.text
@@ -91,12 +288,45 @@ def test_admin_static_hides_managed_source_label():
     assert "sourceEl.textContent = source" in script
 
 
+def test_admin_login_page_and_model_search_markup_exist():
+    login_page = Path("api/admin_static/login.html").read_text(encoding="utf-8")
+    app_page = Path("api/admin_static/index.html").read_text(encoding="utf-8")
+    script = Path("api/admin_static/admin.js").read_text(encoding="utf-8")
+
+    assert 'id="loginForm"' in login_page
+    assert 'id="adminViews"' not in login_page
+    assert 'id="modelVisibilitySearch"' in app_page
+    assert 'id="modelVisibilityFilter"' in app_page
+    assert 'id="modelVisibilityPrevButton"' in app_page
+    assert 'id="modelVisibilityNextButton"' in app_page
+    assert 'id="uncheckAllModelsButton"' in app_page
+    assert 'id="downloadModelCatalogButton"' in app_page
+    assert "loginOverlay" not in app_page
+    assert "modelVisibilitySearch" in script
+    assert "modelVisibilityFilter" in script
+    assert "downloadModelCatalogButton" in script
+    assert 'id="copyCodexConfigButton"' in app_page
+    assert "copyCodexConfigButton" in script
+    assert "Client API Keys" not in app_page
+    assert "Generate API Key" not in app_page
+    assert "createApiKeyButton" not in script
+    assert "createAccessApiKey" not in script
+    assert "copyCodexConfig" in script
+    assert "FREE_CODEX_KEY" not in script
+    assert "auth_mode=embedded" not in script
+    assert "copyText" in script
+    assert 'document.execCommand("copy")' in script
+    assert "link.click()" in script
+    assert "document.body.appendChild(link)" in script
+    assert "modelVisibilityPage" in script
+
+
 def test_admin_config_masks_secrets_and_exposes_manifest(monkeypatch, tmp_path):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_app(lifespan_enabled=False)
 
-    response = _local_client(app).get("/admin/api/config")
+    response = _admin_client(app).get("/admin/api/config")
 
     assert response.status_code == 200
     body = response.json()
@@ -134,7 +364,7 @@ def test_admin_config_preserves_managed_env_source_contract(monkeypatch, tmp_pat
     env_file.write_text("MODEL=open_router/managed-model\n", encoding="utf-8")
     app = create_app(lifespan_enabled=False)
 
-    response = _local_client(app).get("/admin/api/config")
+    response = _admin_client(app).get("/admin/api/config")
 
     assert response.status_code == 200
     body = response.json()
@@ -148,7 +378,7 @@ def test_admin_validate_rejects_bad_model_shape(monkeypatch, tmp_path):
     _clear_process_config(monkeypatch)
     app = create_app(lifespan_enabled=False)
 
-    response = _local_client(app).post(
+    response = _admin_client(app).post(
         "/admin/api/config/validate",
         json={"values": {"MODEL": "missing-provider-prefix"}},
     )
@@ -164,7 +394,7 @@ def test_admin_validate_rejects_bad_api_key_rotation_mode(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)
     app = create_app(lifespan_enabled=False)
 
-    response = _local_client(app).post(
+    response = _admin_client(app).post(
         "/admin/api/config/validate",
         json={"values": {"API_KEY_ROTATION_MODE": "always_random"}},
     )
@@ -182,7 +412,7 @@ def test_admin_apply_writes_complete_managed_env_and_masks_preview(
     _clear_process_config(monkeypatch)
     app = create_app(lifespan_enabled=False)
 
-    response = _local_client(app).post(
+    response = _admin_client(app).post(
         "/admin/api/config/apply",
         json={
             "values": {
@@ -216,7 +446,7 @@ def test_admin_apply_writes_fireworks_key_and_masks_preview(monkeypatch, tmp_pat
     _clear_process_config(monkeypatch)
     app = create_app(lifespan_enabled=False)
 
-    response = _local_client(app).post(
+    response = _admin_client(app).post(
         "/admin/api/config/apply",
         json={
             "values": {
@@ -241,7 +471,7 @@ def test_admin_apply_writes_gemini_key_and_masks_preview(monkeypatch, tmp_path):
     _clear_process_config(monkeypatch)
     app = create_app(lifespan_enabled=False)
 
-    response = _local_client(app).post(
+    response = _admin_client(app).post(
         "/admin/api/config/apply",
         json={
             "values": {
@@ -266,7 +496,7 @@ def test_admin_apply_writes_groq_key_and_masks_preview(monkeypatch, tmp_path):
     _clear_process_config(monkeypatch)
     app = create_app(lifespan_enabled=False)
 
-    response = _local_client(app).post(
+    response = _admin_client(app).post(
         "/admin/api/config/apply",
         json={
             "values": {
@@ -291,7 +521,7 @@ def test_admin_apply_writes_cerebras_key_and_masks_preview(monkeypatch, tmp_path
     _clear_process_config(monkeypatch)
     app = create_app(lifespan_enabled=False)
 
-    response = _local_client(app).post(
+    response = _admin_client(app).post(
         "/admin/api/config/apply",
         json={
             "values": {
@@ -331,7 +561,7 @@ def test_admin_apply_preserves_hidden_diagnostics_and_smoke_values(
     )
     app = create_app(lifespan_enabled=False)
 
-    response = _local_client(app).post(
+    response = _admin_client(app).post(
         "/admin/api/config/apply",
         json={"values": {"MODEL": "open_router/test-model"}},
     )
@@ -363,7 +593,7 @@ def test_admin_apply_omits_stale_zai_base_url(monkeypatch, tmp_path):
     )
     app = create_app(lifespan_enabled=False)
 
-    response = _local_client(app).post(
+    response = _admin_client(app).post(
         "/admin/api/config/apply",
         json={"values": {"MODEL": "zai/glm-5.1"}},
     )
@@ -394,7 +624,7 @@ def test_admin_apply_omits_stale_fixed_claude_runtime_settings(monkeypatch, tmp_
     )
     app = create_app(lifespan_enabled=False)
 
-    response = _local_client(app).post(
+    response = _admin_client(app).post(
         "/admin/api/config/apply",
         json={"values": {"MODEL": "open_router/test-model"}},
     )
@@ -419,7 +649,7 @@ def test_admin_apply_restart_required_reports_automatic_restart(monkeypatch, tmp
 
     app.state.admin_restart_callback = restart_callback
 
-    response = _local_client(app).post(
+    response = _admin_client(app).post(
         "/admin/api/config/apply",
         json={"values": {"PORT": "9090"}},
     )
@@ -442,7 +672,7 @@ def test_admin_apply_restart_required_reports_manual_fallback(monkeypatch, tmp_p
     _clear_process_config(monkeypatch)
     app = create_app(lifespan_enabled=False)
 
-    response = _local_client(app).post(
+    response = _admin_client(app).post(
         "/admin/api/config/apply",
         json={"values": {"PORT": "9091"}},
     )
@@ -465,12 +695,12 @@ def test_admin_process_env_values_are_locked_and_not_written(monkeypatch, tmp_pa
     monkeypatch.setenv("MODEL", "open_router/process-model")
     app = create_app(lifespan_enabled=False)
 
-    config = _local_client(app).get("/admin/api/config").json()
+    config = _admin_client(app).get("/admin/api/config").json()
     model_field = next(field for field in config["fields"] if field["key"] == "MODEL")
     assert model_field["locked"] is True
     assert model_field["source"] == "process"
 
-    response = _local_client(app).post(
+    response = _admin_client(app).post(
         "/admin/api/config/apply",
         json={"values": {"MODEL": "deepseek/managed-model"}},
     )
@@ -490,12 +720,12 @@ def test_admin_first_apply_migrates_repo_env(monkeypatch, tmp_path):
     )
     app = create_app(lifespan_enabled=False)
 
-    config = _local_client(app).get("/admin/api/config").json()
+    config = _admin_client(app).get("/admin/api/config").json()
     model_field = next(field for field in config["fields"] if field["key"] == "MODEL")
     assert model_field["value"] == "deepseek/deepseek-chat"
     assert model_field["source"] == "repo_env"
 
-    response = _local_client(app).post(
+    response = _admin_client(app).post(
         "/admin/api/config/apply",
         json={"values": {}},
     )
@@ -525,7 +755,7 @@ def test_admin_local_provider_status_reports_reachable(monkeypatch, tmp_path):
             return httpx.Response(200, json={"data": []})
 
     with patch("api.admin_routes.httpx.AsyncClient", FakeAsyncClient):
-        response = _local_client(app).get("/admin/api/providers/local-status")
+        response = _admin_client(app).get("/admin/api/providers/local-status")
 
     assert response.status_code == 200
     providers = response.json()["providers"]
@@ -536,3 +766,4 @@ def test_admin_launch_url_uses_loopback_for_wildcard_host():
     settings = Settings.model_construct(host="0.0.0.0", port=8082)
 
     assert local_admin_url(settings) == "http://127.0.0.1:8082/admin"
+

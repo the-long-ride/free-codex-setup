@@ -4,7 +4,7 @@ import json
 import tomllib
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 from urllib.error import URLError
 from urllib.request import Request
 
@@ -478,6 +478,7 @@ def test_launch_codex_passes_responses_config_and_child_env(
     assert command[0] == "resolved-codex.cmd"
     assert 'model_provider="fcc"' in command
     assert 'model_providers.fcc.base_url="http://127.0.0.1:9191/v1"' in command
+    assert 'model_providers.fcc.api_key="proxy-token"' in command
     assert 'model_providers.fcc.wire_api="responses"' in command
     assert f"model_catalog_json={json.dumps(str(catalog_path))}" in command
     assert command[-2:] == ["exec", "hello"]
@@ -491,7 +492,8 @@ def test_launch_codex_passes_responses_config_and_child_env(
         "nvidia_nim/provider-model"
     ]
     child_env = popen.call_args.kwargs["env"]
-    assert child_env["FCC_CODEX_API_KEY"] == "proxy-token"
+    # api_key is written directly to config.toml via -c flag, not env vars
+    assert "FCC_CODEX_API_KEY" not in child_env
     assert child_env["CODEX_HOME"] == "keep-home"
     assert "OPENAI_API_KEY" not in child_env
     assert "OPENAI_BASE_URL" not in child_env
@@ -534,294 +536,52 @@ def test_launch_codex_catalog_failure_warns_and_continues(
     assert "launching without model picker catalog" in captured.err
 
 
-def test_activate_codex_proxy_config_writes_temp_config_and_restore_recovers_originals(
+def test_free_codex_starts_server_without_touching_codex_config(
     tmp_path: Path,
 ) -> None:
-    from cli.entrypoints import (
-        _activate_codex_proxy_config,
-        _codex_auth_path,
-        _codex_config_path,
-        _restore_standard_codex_config,
-    )
-
-    settings = _launcher_settings(port=9191, token="proxy-token")
-    codex_dir = tmp_path / ".codex"
-    codex_dir.mkdir()
-    (codex_dir / "config.toml").write_text(
-        "\n".join(
-            [
-                'model = "gpt-5.5"',
-                "",
-                "[shell_environment_policy.set]",
-                'OPENAI_API_KEY = "official-key"',
-                "",
-                "[profiles.custom-profile]",
-                'model_provider = "openai"',
-                'model = "profile-model"',
-                "",
-                "[model_providers.openai]",
-                'name = "OpenAI"',
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    (codex_dir / "auth.json").write_text(
-        json.dumps({"OPENAI_API_KEY": "official-key"}, indent=2) + "\n",
-        encoding="utf-8",
-    )
-
-    with patch("pathlib.Path.home", return_value=tmp_path):
-        _activate_codex_proxy_config(settings)
-        config_text = _codex_config_path().read_text(encoding="utf-8")
-        auth_payload = json.loads(_codex_auth_path().read_text(encoding="utf-8"))
-
-        assert 'model = "gpt-5.5"' in config_text
-        assert 'model_provider = "fcc"' in config_text
-        assert config_text.index('model_provider = "fcc"') < config_text.index(
-            "[shell_environment_policy.set]"
-        )
-        assert 'model = "nvidia_nim/test-model"' not in config_text
-        assert 'OPENAI_API_KEY = "official-key"' in config_text
-        assert 'FCC_CODEX_API_KEY = "proxy-token"' in config_text
-        assert 'base_url = "http://127.0.0.1:9191/v1"' in config_text
-        assert '[profiles.custom-profile]\nmodel_provider = "openai"' in config_text
-        assert auth_payload["FCC_CODEX_API_KEY"] == "proxy-token"
-        assert auth_payload["OPENAI_API_KEY"] == "official-key"
-
-        assert _restore_standard_codex_config() is True
-        assert _codex_config_path().read_text(encoding="utf-8") == "\n".join(
-            [
-                'model = "gpt-5.5"',
-                "",
-                "[shell_environment_policy.set]",
-                'OPENAI_API_KEY = "official-key"',
-                "",
-                "[profiles.custom-profile]",
-                'model_provider = "openai"',
-                'model = "profile-model"',
-                "",
-                "[model_providers.openai]",
-                'name = "OpenAI"',
-                "",
-            ]
-        )
-        restored_auth = json.loads(_codex_auth_path().read_text(encoding="utf-8"))
-        assert restored_auth == {"OPENAI_API_KEY": "official-key"}
-
-
-def test_restore_standard_codex_config_removes_temp_files_when_originals_missing(
-    tmp_path: Path,
-) -> None:
-    from cli.entrypoints import (
-        _activate_codex_proxy_config,
-        _codex_auth_path,
-        _codex_config_path,
-        _restore_standard_codex_config,
-    )
-
-    settings = _launcher_settings(port=8082, token="freecc")
-
-    with patch("pathlib.Path.home", return_value=tmp_path):
-        _activate_codex_proxy_config(settings)
-        assert _codex_config_path().exists()
-        assert _codex_auth_path().exists()
-
-        assert _restore_standard_codex_config() is True
-        assert not _codex_config_path().exists()
-        assert not _codex_auth_path().exists()
-
-
-def test_restore_standard_codex_config_preserves_unrelated_reordered_changes(
-    tmp_path: Path,
-) -> None:
-    from cli.entrypoints import (
-        _activate_codex_proxy_config,
-        _codex_auth_path,
-        _codex_config_path,
-        _restore_standard_codex_config,
-    )
+    from cli.entrypoints import free_codex
 
     settings = _launcher_settings(port=8082, token="freecc")
     codex_dir = tmp_path / ".codex"
     codex_dir.mkdir()
-    (codex_dir / "config.toml").write_text(
-        "\n".join(
-            [
-                'model = "gpt-5.5"',
-                'model_provider = "openai"',
-                "",
-                "[shell_environment_policy.set]",
-                'OPENAI_API_KEY = "official-key"',
-                "",
-                "[model_providers.openai]",
-                'name = "OpenAI"',
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    (codex_dir / "auth.json").write_text(
-        json.dumps({"OPENAI_API_KEY": "official-key"}, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    config_path = codex_dir / "config.toml"
+    auth_path = codex_dir / "auth.json"
+    config_path.write_text('model_provider = "openai"\n', encoding="utf-8")
+    auth_path.write_text('{"OPENAI_API_KEY":"official"}\n', encoding="utf-8")
 
-    with patch("pathlib.Path.home", return_value=tmp_path):
-        _activate_codex_proxy_config(settings)
+    with (
+        patch("pathlib.Path.home", return_value=tmp_path),
+        patch("cli.entrypoints.get_settings", return_value=settings),
+        patch("cli.entrypoints._wait_for_proxy_ready", return_value=True),
+        patch("cli.entrypoints._prepare_codex_model_catalog") as prepare_catalog,
+        patch("cli.entrypoints.subprocess.Popen") as popen,
+        patch("cli.entrypoints.register_pid") as register_pid,
+        patch("cli.entrypoints.unregister_pid") as unregister_pid,
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        process = popen.return_value
+        process.pid = 12345
+        process.wait.return_value = 0
+        free_codex([])
 
-        _codex_config_path().write_text(
-            "\n".join(
-                [
-                    'model = "gpt-5.5"',
-                    'model_provider = "fcc"',
-                    'model_catalog_json = "C:/tmp/catalog.json"',
-                    "",
-                    "[model_providers.openai]",
-                    'name = "OpenAI"',
-                    "",
-                    "[profiles.alt]",
-                    'model_provider = "openai"',
-                    "",
-                    "[shell_environment_policy.set]",
-                    'EXTRA_FLAG = "keep-me"',
-                    'OPENAI_API_KEY = "official-key"',
-                    'FCC_CODEX_API_KEY = "mutated-token"',
-                    "",
-                    "[model_providers.fcc]",
-                    'name = "Free Claude Code"',
-                    'base_url = "http://127.0.0.1:8082/v1"',
-                    'env_key = "FCC_CODEX_API_KEY"',
-                    'wire_api = "responses"',
-                    "",
-                ]
-            ),
-            encoding="utf-8",
-        )
-        _codex_auth_path().write_text(
-            json.dumps(
-                {
-                    "OPENAI_API_KEY": "official-key",
-                    "FCC_CODEX_API_KEY": "mutated-token",
-                    "EXTRA_AUTH": "keep-me",
-                },
-                indent=2,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-
-        assert _restore_standard_codex_config() is True
-
-        restored_config = _codex_config_path().read_text(encoding="utf-8")
-        assert 'model_provider = "openai"' in restored_config
-        assert 'model_catalog_json = "C:/tmp/catalog.json"' not in restored_config
-        assert "[model_providers.fcc]" not in restored_config
-        assert 'FCC_CODEX_API_KEY = "mutated-token"' not in restored_config
-        assert 'OPENAI_API_KEY = "official-key"' in restored_config
-        assert 'EXTRA_FLAG = "keep-me"' in restored_config
-        assert "[profiles.alt]" in restored_config
-
-        restored_auth = json.loads(_codex_auth_path().read_text(encoding="utf-8"))
-        assert restored_auth == {
-            "OPENAI_API_KEY": "official-key",
-            "EXTRA_AUTH": "keep-me",
-        }
+    assert exc_info.value.code == 0
+    prepare_catalog.assert_not_called()
+    popen.assert_called_once_with(["uv", "run", "fcc-server"], cwd=ANY)
+    assert config_path.read_text(encoding="utf-8") == 'model_provider = "openai"\n'
+    assert auth_path.read_text(encoding="utf-8") == '{"OPENAI_API_KEY":"official"}\n'
+    register_pid.assert_called_once_with(12345)
+    unregister_pid.assert_called_once_with(12345)
 
 
-def test_restore_standard_codex_config_keeps_new_unrelated_content_when_original_missing(
-    tmp_path: Path,
-) -> None:
-    from cli.entrypoints import (
-        _activate_codex_proxy_config,
-        _codex_auth_path,
-        _codex_config_path,
-        _restore_standard_codex_config,
-    )
+def test_free_codex_rejects_sleep_flag(capsys: pytest.CaptureFixture[str]) -> None:
+    from cli.entrypoints import free_codex
 
-    settings = _launcher_settings(port=8082, token="freecc")
-
-    with patch("pathlib.Path.home", return_value=tmp_path):
-        _activate_codex_proxy_config(settings)
-
-        _codex_config_path().write_text(
-            "\n".join(
-                [
-                    'model_provider = "fcc"',
-                    'model_catalog_json = "C:/tmp/catalog.json"',
-                    "",
-                    "[profiles.saved]",
-                    'model = "gpt-5"',
-                    "",
-                    "[shell_environment_policy.set]",
-                    'FCC_CODEX_API_KEY = "mutated-token"',
-                    'OPENAI_API_KEY = "official-key"',
-                    "",
-                    "[model_providers.fcc]",
-                    'name = "Free Claude Code"',
-                    'base_url = "http://127.0.0.1:8082/v1"',
-                    'env_key = "FCC_CODEX_API_KEY"',
-                    'wire_api = "responses"',
-                    "",
-                ]
-            ),
-            encoding="utf-8",
-        )
-        _codex_auth_path().write_text(
-            json.dumps(
-                {
-                    "FCC_CODEX_API_KEY": "mutated-token",
-                    "OPENAI_API_KEY": "official-key",
-                },
-                indent=2,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-
-        assert _restore_standard_codex_config() is True
-
-        restored_config = _codex_config_path().read_text(encoding="utf-8")
-        assert 'model_provider = "fcc"' not in restored_config
-        assert 'model_catalog_json = "C:/tmp/catalog.json"' not in restored_config
-        assert "[model_providers.fcc]" not in restored_config
-        assert 'FCC_CODEX_API_KEY = "mutated-token"' not in restored_config
-        assert "[profiles.saved]" in restored_config
-        assert 'OPENAI_API_KEY = "official-key"' in restored_config
-
-        restored_auth = json.loads(_codex_auth_path().read_text(encoding="utf-8"))
-        assert restored_auth == {"OPENAI_API_KEY": "official-key"}
-
-
-def test_free_codex_sleep_restores_existing_backup(tmp_path: Path) -> None:
-    from cli.entrypoints import (
-        _activate_codex_proxy_config,
-        _codex_auth_path,
-        _codex_config_path,
-        free_codex,
-    )
-
-    settings = _launcher_settings(port=8082, token="freecc")
-    codex_dir = tmp_path / ".codex"
-    codex_dir.mkdir()
-    (codex_dir / "config.toml").write_text(
-        'model_provider = "openai"\n', encoding="utf-8"
-    )
-    (codex_dir / "auth.json").write_text(
-        '{"OPENAI_API_KEY":"official"}\n', encoding="utf-8"
-    )
-
-    with patch("pathlib.Path.home", return_value=tmp_path):
-        _activate_codex_proxy_config(settings)
+    with pytest.raises(SystemExit) as exc_info:
         free_codex(["--sleep"])
 
-        assert (
-            _codex_config_path().read_text(encoding="utf-8")
-            == 'model_provider = "openai"\n'
-        )
-        assert json.loads(_codex_auth_path().read_text(encoding="utf-8")) == {
-            "OPENAI_API_KEY": "official"
-        }
-
+    assert exc_info.value.code == 2
+    captured = capsys.readouterr()
+    assert "Usage: free-codex" in captured.err
 
 def test_launch_claude_keyboard_interrupt_kills_child_tree() -> None:
     from cli.entrypoints import launch_claude
@@ -889,3 +649,5 @@ def test_launch_claude_unreachable_proxy_exits_with_hint(
     captured = capsys.readouterr()
     assert "http://127.0.0.1:9393" in captured.err
     assert "fcc-server" in captured.err
+
+

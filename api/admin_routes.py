@@ -10,13 +10,28 @@ from urllib.parse import urlsplit
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
+from cli.codex_model_catalog import build_codex_model_catalog
 from config.settings import Settings
 from config.settings import get_settings as get_cached_settings
+from core.codex_config import (
+    CODEX_MODEL_CATALOG_DOWNLOAD_FILENAME,
+    render_codex_config_snippet,
+)
 from providers.registry import ProviderRegistry
 
+from .access_control import (
+    ADMIN_SESSION_COOKIE,
+    ADMIN_SESSION_MAX_AGE_SECONDS,
+    admin_session_status,
+    change_admin_password,
+    create_admin_session,
+    get_visible_model_ids,
+    logout_admin_session,
+    set_visible_model_ids,
+)
 from .admin_config import (
     FIELD_BY_KEY,
     load_config_response,
@@ -24,7 +39,8 @@ from .admin_config import (
     validate_updates,
     write_managed_env,
 )
-from .admin_urls import local_admin_url
+from .admin_urls import local_admin_url, local_proxy_root_url
+from .model_catalog import build_models_list_response
 
 router = APIRouter()
 
@@ -40,6 +56,19 @@ class AdminConfigPayload(BaseModel):
     """Partial config update submitted by the admin UI."""
 
     values: dict[str, Any] = Field(default_factory=dict)
+
+
+class AdminLoginPayload(BaseModel):
+    password: str = Field(default="")
+
+
+class AdminPasswordChangePayload(BaseModel):
+    current_password: str = Field(default="")
+    new_password: str = Field(default="")
+
+
+class ModelVisibilityPayload(BaseModel):
+    model_ids: list[str] = Field(default_factory=list)
 
 
 def _is_loopback_host(host: str | None) -> bool:
@@ -73,36 +102,65 @@ def require_loopback_admin(request: Request) -> None:
         raise HTTPException(status_code=403, detail="Admin UI is local-only")
 
 
+def require_admin_session(request: Request) -> None:
+    """Require an active admin cookie session."""
+
+    require_loopback_admin(request)
+    session = admin_session_status(request.cookies.get(ADMIN_SESSION_COOKIE))
+    if not session["authenticated"]:
+        raise HTTPException(status_code=401, detail="Admin login required")
+
+
 def _asset_response(filename: str) -> FileResponse:
     path = STATIC_DIR / filename
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Admin asset not found")
-    return FileResponse(path)
+    response = FileResponse(path)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+def _html_response(filename: str) -> FileResponse:
+    response = _asset_response(filename)
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @router.get("/admin", include_in_schema=False)
 async def admin_page(request: Request):
     require_loopback_admin(request)
-    return _asset_response("index.html")
+    session = admin_session_status(request.cookies.get(ADMIN_SESSION_COOKIE))
+    if not session["authenticated"]:
+        return RedirectResponse("/admin/login", status_code=303)
+    return _html_response("index.html")
+
+
+@router.get("/admin/login", include_in_schema=False)
+async def admin_login_page(request: Request):
+    require_loopback_admin(request)
+    session = admin_session_status(request.cookies.get(ADMIN_SESSION_COOKIE))
+    if session["authenticated"]:
+        return RedirectResponse("/admin", status_code=303)
+    return _html_response("login.html")
 
 
 @router.get("/admin/assets/{filename}", include_in_schema=False)
 async def admin_asset(filename: str, request: Request):
     require_loopback_admin(request)
-    if filename not in {"admin.css", "admin.js"}:
+    if filename not in {"admin.css", "admin.js", "login.js"}:
         raise HTTPException(status_code=404, detail="Admin asset not found")
     return _asset_response(filename)
 
 
 @router.get("/admin/api/config")
 async def get_admin_config(request: Request):
-    require_loopback_admin(request)
+    require_admin_session(request)
     return load_config_response()
 
 
 @router.post("/admin/api/config/validate")
 async def validate_admin_config(payload: AdminConfigPayload, request: Request):
-    require_loopback_admin(request)
+    require_admin_session(request)
     return validate_updates(_filtered_values(payload.values))
 
 
@@ -112,7 +170,7 @@ async def apply_admin_config(
     request: Request,
     background_tasks: BackgroundTasks,
 ):
-    require_loopback_admin(request)
+    require_admin_session(request)
     result = write_managed_env(_filtered_values(payload.values))
     if not result["applied"]:
         return result
@@ -136,7 +194,7 @@ async def apply_admin_config(
 
 @router.get("/admin/api/status")
 async def admin_status(request: Request):
-    require_loopback_admin(request)
+    require_admin_session(request)
     settings = get_cached_settings()
     registry = getattr(request.app.state, "provider_registry", None)
     cached_models: dict[str, list[str]] = {}
@@ -159,7 +217,7 @@ async def admin_status(request: Request):
 
 @router.get("/admin/api/providers/local-status")
 async def local_provider_status(request: Request):
-    require_loopback_admin(request)
+    require_admin_session(request)
     config = load_config_response()
     values = {field["key"]: field["value"] for field in config["fields"]}
     checks = []
@@ -171,7 +229,7 @@ async def local_provider_status(request: Request):
 
 @router.post("/admin/api/providers/{provider_id}/test")
 async def test_provider(provider_id: str, request: Request):
-    require_loopback_admin(request)
+    require_admin_session(request)
     settings = get_cached_settings()
     registry = getattr(request.app.state, "provider_registry", None)
     if not isinstance(registry, ProviderRegistry):
@@ -196,7 +254,7 @@ async def test_provider(provider_id: str, request: Request):
 
 @router.post("/admin/api/models/refresh")
 async def refresh_models(request: Request):
-    require_loopback_admin(request)
+    require_admin_session(request)
     settings = get_cached_settings()
     registry = getattr(request.app.state, "provider_registry", None)
     if not isinstance(registry, ProviderRegistry):
@@ -209,6 +267,127 @@ async def refresh_models(request: Request):
             for provider_id, model_ids in registry.cached_model_ids().items()
         }
     }
+
+
+@router.get("/admin/api/session")
+async def get_admin_session(request: Request):
+    require_loopback_admin(request)
+    return admin_session_status(request.cookies.get(ADMIN_SESSION_COOKIE))
+
+
+@router.post("/admin/api/login")
+async def login_admin(payload: AdminLoginPayload, request: Request):
+    require_loopback_admin(request)
+    session = create_admin_session(payload.password)
+    if session is None:
+        raise HTTPException(status_code=401, detail="Invalid password")
+    response = JSONResponse(
+        {
+            "authenticated": True,
+            "expires_at": session["expires_at"],
+        }
+    )
+    response.set_cookie(
+        ADMIN_SESSION_COOKIE,
+        session["session_id"],
+        httponly=True,
+        samesite="strict",
+        max_age=ADMIN_SESSION_MAX_AGE_SECONDS,
+        secure=False,
+    )
+    return response
+
+
+@router.post("/admin/api/logout")
+async def logout_admin(request: Request):
+    require_loopback_admin(request)
+    logout_admin_session(request.cookies.get(ADMIN_SESSION_COOKIE))
+    response = JSONResponse({"authenticated": False})
+    response.delete_cookie(ADMIN_SESSION_COOKIE)
+    return response
+
+
+@router.get("/admin/api/access")
+async def get_access_state(request: Request):
+    require_admin_session(request)
+    settings = get_cached_settings()
+    registry = getattr(request.app.state, "provider_registry", None)
+    provider_registry = registry if isinstance(registry, ProviderRegistry) else None
+    full_models = build_models_list_response(settings, provider_registry)
+    explicit_visible_ids = get_visible_model_ids()
+    visible_ids = set(explicit_visible_ids or [])
+    visibility_configured = explicit_visible_ids is not None
+    return {
+        "password_change_supported": True,
+        "model_visibility_configured": visibility_configured,
+        "visible_model_ids": sorted(visible_ids),
+        "available_models": [
+            {
+                "id": model.id,
+                "display_name": model.display_name,
+                "enabled": model.id in visible_ids if visibility_configured else True,
+            }
+            for model in full_models.data
+        ],
+    }
+
+
+@router.post("/admin/api/access/password")
+async def update_access_password(payload: AdminPasswordChangePayload, request: Request):
+    require_admin_session(request)
+    if len(payload.new_password.strip()) == 0:
+        raise HTTPException(status_code=400, detail="New password cannot be blank")
+    if not change_admin_password(payload.current_password, payload.new_password):
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+    response = JSONResponse({"updated": True})
+    response.delete_cookie(ADMIN_SESSION_COOKIE)
+    return response
+
+
+@router.get("/admin/api/access/codex-config")
+async def get_access_codex_config(request: Request):
+    require_admin_session(request)
+    settings = get_cached_settings()
+    snippet = render_codex_config_snippet(
+        base_url=f"{local_proxy_root_url(settings).rstrip('/')}/v1",
+        api_key=settings.anthropic_auth_token,
+    )
+    return {
+        "auth_source": "env_key",
+        "snippet": snippet,
+        "catalog_filename": CODEX_MODEL_CATALOG_DOWNLOAD_FILENAME,
+    }
+
+
+@router.get("/admin/api/access/model-catalog")
+async def download_access_model_catalog(request: Request):
+    require_admin_session(request)
+    settings = get_cached_settings()
+    registry = getattr(request.app.state, "provider_registry", None)
+    provider_registry = registry if isinstance(registry, ProviderRegistry) else None
+    visible_model_ids = get_visible_model_ids()
+    models_response = build_models_list_response(
+        settings,
+        provider_registry,
+        visible_model_ids=(
+            set(visible_model_ids) if visible_model_ids is not None else None
+        ),
+    )
+    catalog = build_codex_model_catalog(models_response.model_dump(mode="json"))
+    return JSONResponse(
+        catalog,
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{CODEX_MODEL_CATALOG_DOWNLOAD_FILENAME}"'
+            )
+        },
+    )
+
+
+@router.post("/admin/api/access/model-visibility")
+async def update_model_visibility(payload: ModelVisibilityPayload, request: Request):
+    require_admin_session(request)
+    return {"visible_model_ids": set_visible_model_ids(payload.model_ids)}
 
 
 def _filtered_values(values: dict[str, Any]) -> dict[str, Any]:

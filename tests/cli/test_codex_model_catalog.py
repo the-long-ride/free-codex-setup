@@ -169,3 +169,4 @@ def test_generated_catalog_schema_is_accepted_by_installed_codex(
 
     assert result.returncode == 0, result.stderr
     assert "nvidia_nim/test-model" in result.stdout
+

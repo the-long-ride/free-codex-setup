@@ -167,3 +167,50 @@ def test_models_list_works_without_provider_registry():
         "claude-3-freecc-no-thinking/open_router/anthropic/claude-opus",
     ]
     assert "claude-sonnet-4-20250514" in ids
+
+
+def test_models_list_filters_to_explicitly_visible_models(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    access_dir = tmp_path / ".fcc"
+    access_dir.mkdir(parents=True)
+    (access_dir / "access.json").write_text(
+        '{"password_hash":"pbkdf2_sha256$600000$abc$def","api_keys":[],"sessions":{},'
+        '"visible_model_ids":["anthropic/deepseek/deepseek-chat"]}',
+        encoding="utf-8",
+    )
+    app = create_app(lifespan_enabled=False)
+    settings = _settings()
+    app.dependency_overrides[get_settings] = lambda: settings
+
+    try:
+        response = TestClient(app).get("/v1/models")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    ids = [item["id"] for item in response.json()["data"]]
+    assert ids == ["anthropic/deepseek/deepseek-chat"]
+
+
+def test_models_list_allows_explicit_empty_visibility(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    access_dir = tmp_path / ".fcc"
+    access_dir.mkdir(parents=True)
+    (access_dir / "access.json").write_text(
+        '{"password_hash":"pbkdf2_sha256$600000$abc$def","api_keys":[],"sessions":{},'
+        '"visible_model_ids":[]}',
+        encoding="utf-8",
+    )
+    app = create_app(lifespan_enabled=False)
+    settings = _settings()
+    app.dependency_overrides[get_settings] = lambda: settings
+
+    try:
+        response = TestClient(app).get("/v1/models")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["data"] == []

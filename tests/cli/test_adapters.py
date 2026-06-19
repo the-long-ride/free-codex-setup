@@ -234,10 +234,11 @@ def test_codex_adapter_builds_new_task_command_and_env() -> None:
     assert "/workspace" in invocation.argv
     assert invocation.argv[-1] == "hello"
     assert 'model_provider="fcc"' in invocation.argv
+    assert 'model_providers.fcc.api_key="proxy-token"' in invocation.argv
     assert 'model_providers.fcc.wire_api="responses"' in invocation.argv
     assert invocation.env["KEEP_ME"] == "yes"
     assert invocation.env["CODEX_HOME"] == "/tmp/codex"
-    assert invocation.env["FCC_CODEX_API_KEY"] == "proxy-token"
+    assert "FCC_CODEX_API_KEY" not in invocation.env
     assert "OPENAI_API_KEY" not in invocation.env
     assert "OPENAI_BASE_URL" not in invocation.env
     assert "CODEX_API_KEY" not in invocation.env
@@ -295,12 +296,13 @@ def test_codex_adapter_launcher_command_targets_responses_provider() -> None:
         argv=["exec", "hello"],
         settings=_config(model="nvidia_nim/test-model"),
         proxy_root_url="http://127.0.0.1:8082",
+        auth_token="proxy-token",
     )
 
     assert command[:2] == ["codex.cmd", "-c"]
     assert 'model_provider="fcc"' in command
     assert 'model_providers.fcc.base_url="http://127.0.0.1:8082/v1"' in command
-    assert 'model_providers.fcc.env_key="FCC_CODEX_API_KEY"' in command
+    assert 'model_providers.fcc.api_key="proxy-token"' in command
     assert 'model_providers.fcc.wire_api="responses"' in command
     assert 'model="nvidia_nim/test-model"' in command
     assert command[-2:] == ["exec", "hello"]
@@ -322,7 +324,8 @@ def test_codex_adapter_launcher_env_strips_openai_credentials() -> None:
 
     assert env["PATH"] == "keep"
     assert env["CODEX_HOME"] == "/tmp/codex"
-    assert env["FCC_CODEX_API_KEY"] == "proxy-token"
+    # FCC_CODEX_API_KEY is no longer injected into env; api_key goes in config.toml
+    assert "FCC_CODEX_API_KEY" not in env
     assert "OPENAI_API_KEY" not in env
     assert "OPENAI_BASE_URL" not in env
     assert "CODEX_API_KEY" not in env

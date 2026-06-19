@@ -469,7 +469,7 @@ adapter:
   `model_catalog_json` file under `~/.fcc/`, and injects that path so Codex's
   native `/model` picker lists FCC provider slugs. Catalog generation is
   fail-open: launch continues with a warning if the catalog cannot be prepared.
-- It stores the proxy auth token in `FCC_CODEX_API_KEY` for Codex to read.
+- It writes the proxy auth token directly as `api_key` in the `[model_providers.fcc]` config table so Codex reads it from the config file without requiring an environment variable. The default `freecc` token only authenticates local (localhost) requests; remote clients must use a generated API key or a custom `ANTHROPIC_AUTH_TOKEN`.
 - Managed task invocations use Codex JSON output and map Responses events into
   the messaging parser event shape.
 - Codex `response.reasoning_text.delta` events are converted into the shared

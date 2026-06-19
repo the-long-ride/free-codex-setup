@@ -1,6 +1,6 @@
 """Dependency injection for FastAPI."""
 
-import secrets
+import hmac
 
 from fastapi import Depends, HTTPException, Request
 from loguru import logger
@@ -16,6 +16,29 @@ from providers.exceptions import (
     UnknownProviderTypeError,
 )
 from providers.registry import PROVIDER_DESCRIPTORS, ProviderRegistry
+
+_DEFAULT_LOCALHOST_NETWORKS = frozenset({"127.0.0.1", "::1", "0.0.0.0", "::"})
+
+
+def _request_is_local(request: Request) -> bool:
+    """Return whether the request originates from the local machine."""
+
+    client = request.client
+    if client is not None:
+        host = client.host
+        if host in _DEFAULT_LOCALHOST_NETWORKS:
+            return True
+        if host == "::ffff:127.0.0.1":
+            return True
+    forwarded = (
+        request.headers.get("x-forwarded-for") or request.headers.get("x-real-ip") or ""
+    )
+    if forwarded:
+        first_ip = forwarded.split(",")[0].strip()
+        if first_ip in _DEFAULT_LOCALHOST_NETWORKS or first_ip == "::ffff:127.0.0.1":
+            return True
+    return False
+
 
 # Process-level cache: only for :func:`get_provider_for_type` / :func:`get_provider`
 # when there is no ``Request``/``app`` (unit tests, scripts). HTTP handlers must pass
@@ -90,16 +113,17 @@ def get_provider_for_type(provider_type: str) -> BaseProvider:
 
 def require_api_key(
     request: Request, settings: Settings = Depends(get_settings)
-) -> None:
-    """Require a server API key (Anthropic-style).
+) -> str | None:
+    """Require the configured server auth token for client API requests.
 
-    Checks `x-api-key` header or `Authorization: Bearer ...` against
-    `Settings.anthropic_auth_token`. If `ANTHROPIC_AUTH_TOKEN` is empty, this is a no-op.
+    Checks `x-api-key`, `Authorization: Bearer ...`, or
+    `anthropic-auth-token` against `Settings.anthropic_auth_token`. If
+    `ANTHROPIC_AUTH_TOKEN` is empty, client auth is disabled.
     """
-    anthropic_auth_token = settings.anthropic_auth_token.strip()
-    if not anthropic_auth_token:
-        # No API key configured -> allow
-        return
+
+    configured_token = settings.anthropic_auth_token.strip()
+    if not configured_token:
+        return None
 
     header = (
         request.headers.get("x-api-key")
@@ -109,21 +133,18 @@ def require_api_key(
     if not header:
         raise HTTPException(status_code=401, detail="Missing API key")
 
-    # Support both raw key in X-API-Key and Bearer token in Authorization
     token = header.strip()
     if header.lower().startswith("bearer "):
         token = header.split(" ", 1)[1].strip()
 
-    # Strip anything after the first colon to handle tokens with appended model names
     if token and ":" in token:
         token = token.split(":", 1)[0].strip()
 
-    # Constant-time comparison to avoid leaking the configured token via
-    # response-time differences on a per-byte mismatch (CWE-208).
-    if not secrets.compare_digest(
-        token.encode("utf-8"), anthropic_auth_token.encode("utf-8")
-    ):
+    if configured_token == "freecc" and not _request_is_local(request):
         raise HTTPException(status_code=401, detail="Invalid API key")
+    if not hmac.compare_digest(token.encode("utf-8"), configured_token.encode("utf-8")):
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    return None
 
 
 def get_provider() -> BaseProvider:

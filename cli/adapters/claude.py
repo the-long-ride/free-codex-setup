@@ -129,6 +129,7 @@ class ClaudeCliAdapter:
         argv: Iterable[str],
         settings: Any,
         proxy_root_url: str,
+        auth_token: str = "",
     ) -> list[str]:
         """Return the Claude wrapper command without changing user arguments."""
 

@@ -201,3 +201,28 @@ def test_install_ps1_validates_minimum_uv_version() -> None:
     assert '"self", "version", "--short"' in text
     assert "[version]" in text
     assert "uv $MinUvVersion or newer is required" in validate_body
+
+
+def test_free_codex_cmd_wrapper_uses_repo_project_entrypoint() -> None:
+    text = _script_text("free-codex.cmd")
+
+    assert 'set "SCRIPT_DIR=%~dp0"' in text
+    assert 'set "REPO_DIR=%%~fI"' in text
+    assert 'uv run --project "%REPO_DIR%" free-codex %*' in text
+
+
+def test_free_codex_ps1_wrapper_uses_repo_project_entrypoint() -> None:
+    text = _script_text("free-codex.ps1")
+
+    assert "$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path" in text
+    assert 'Resolve-Path (Join-Path $scriptDir "..")' in text
+    assert "& uv run --project $repoRoot free-codex @args" in text
+
+
+def test_add_repo_scripts_to_path_ps1_updates_user_path_and_current_shell() -> None:
+    text = _script_text("add-repo-scripts-to-path.ps1")
+
+    assert '[Environment]::GetEnvironmentVariable("Path", "User")' in text
+    assert '[Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")' in text
+    assert "$env:Path = if ([string]::IsNullOrWhiteSpace($env:Path)) {" in text
+    assert "Open a new terminal, then run: free-codex" in text

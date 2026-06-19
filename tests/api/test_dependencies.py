@@ -13,6 +13,7 @@ from api.dependencies import (
     get_provider_for_type,
     get_settings,
     resolve_provider,
+    _request_is_local,
 )
 from config.nim import NimSettings
 from providers.cerebras import CerebrasProvider
@@ -689,3 +690,46 @@ def test_resolve_provider_unrelated_value_error_is_not_unknown_provider_log() ->
     ):
         deps.resolve_provider("nvidia_nim", app=None, settings=_make_mock_settings())
     log_err.assert_not_called()
+
+
+class TestRequestIsLocal:
+    """Unit tests for _request_is_local helper."""
+
+    def _make_request(self, host: str, port: int = 8082) -> SimpleNamespace:
+        return SimpleNamespace(client=SimpleNamespace(host=host, port=port), headers={})
+
+    def test_ipv4_loopback(self) -> None:
+        assert _request_is_local(self._make_request("127.0.0.1")) is True
+
+    def test_ipv6_loopback(self) -> None:
+        assert _request_is_local(self._make_request("::1")) is True
+
+    def test_ipv4_mapped_loopback(self) -> None:
+        assert _request_is_local(self._make_request("::ffff:127.0.0.1")) is True
+
+    def test_external_ip(self) -> None:
+        assert _request_is_local(self._make_request("192.168.1.5")) is False
+
+    def test_no_client(self) -> None:
+        assert _request_is_local(SimpleNamespace(client=None, headers={})) is False
+
+    def test_x_forwarded_for_loopback(self) -> None:
+        req = SimpleNamespace(
+            client=SimpleNamespace(host="10.0.0.1", port=8082),
+            headers={"x-forwarded-for": "127.0.0.1, 10.0.0.1"},
+        )
+        assert _request_is_local(req) is True
+
+    def test_x_real_ip_loopback(self) -> None:
+        req = SimpleNamespace(
+            client=SimpleNamespace(host="10.0.0.1", port=8082),
+            headers={"x-real-ip": "::1"},
+        )
+        assert _request_is_local(req) is True
+
+    def test_x_forwarded_for_remote(self) -> None:
+        req = SimpleNamespace(
+            client=SimpleNamespace(host="10.0.0.1", port=8082),
+            headers={"x-forwarded-for": "203.0.113.5"},
+        )
+        assert _request_is_local(req) is False

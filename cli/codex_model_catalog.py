@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -117,7 +118,12 @@ def _candidate_from_model_id(
         return _CatalogCandidate(
             slug=remainder,
             provider_model_ref=remainder,
-            display_name=display_name,
+            display_name=_resolved_display_name(
+                display_name=display_name,
+                model_id=model_id,
+                provider_model_ref=remainder,
+                force_no_thinking=False,
+            ),
             force_no_thinking=False,
         )
 
@@ -127,7 +133,12 @@ def _candidate_from_model_id(
         return _CatalogCandidate(
             slug=model_id,
             provider_model_ref=remainder,
-            display_name=display_name,
+            display_name=_resolved_display_name(
+                display_name=display_name,
+                model_id=model_id,
+                provider_model_ref=remainder,
+                force_no_thinking=True,
+            ),
             force_no_thinking=True,
         )
 
@@ -135,7 +146,12 @@ def _candidate_from_model_id(
         return _CatalogCandidate(
             slug=model_id,
             provider_model_ref=model_id,
-            display_name=display_name,
+            display_name=_resolved_display_name(
+                display_name=display_name,
+                model_id=model_id,
+                provider_model_ref=model_id,
+                force_no_thinking=False,
+            ),
             force_no_thinking=False,
         )
 
@@ -175,6 +191,51 @@ def _codex_catalog_entry(
         "supports_search_tool": True,
         "use_responses_lite": False,
     }
+
+
+def _resolved_display_name(
+    *,
+    display_name: str,
+    model_id: str,
+    provider_model_ref: str,
+    force_no_thinking: bool,
+) -> str:
+    if display_name not in {model_id, provider_model_ref}:
+        return display_name
+    label = _humanize_provider_model_ref(provider_model_ref)
+    return f"{label} (No Thinking)" if force_no_thinking else label
+
+
+def _humanize_provider_model_ref(provider_model_ref: str) -> str:
+    provider_id, _, remainder = provider_model_ref.partition("/")
+    if not remainder:
+        return _humanize_token(provider_model_ref)
+    model_segment = remainder.rsplit("/", 1)[-1]
+    return f"{_humanize_provider_id(provider_id)} - {_humanize_model_segment(model_segment)}"
+
+
+def _humanize_provider_id(provider_id: str) -> str:
+    return " ".join(_humanize_token(part) for part in provider_id.split("_"))
+
+
+def _humanize_model_segment(model_segment: str) -> str:
+    parts = [part for part in re.split(r"[-_:]+", model_segment) if part]
+    return " ".join(_humanize_token(part) for part in parts)
+
+
+def _humanize_token(token: str) -> str:
+    special = {
+        "ai": "AI",
+        "gpt": "GPT",
+        "glm": "GLM",
+        "nim": "Nim",
+    }
+    dotted_parts = [part for part in token.split(".") if part]
+    normalized: list[str] = []
+    for part in dotted_parts:
+        lowered = part.lower()
+        normalized.append(special.get(lowered, part.title()))
+    return ".".join(normalized)
 
 
 def _is_provider_model_ref(value: str) -> bool:

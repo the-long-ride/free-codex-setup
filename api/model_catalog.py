@@ -51,7 +51,10 @@ SUPPORTED_CLAUDE_MODELS = [
 
 
 def build_models_list_response(
-    settings: Settings, provider_registry: ProviderRegistry | None
+    settings: Settings,
+    provider_registry: ProviderRegistry | None,
+    *,
+    visible_model_ids: set[str] | None = None,
 ) -> ModelsListResponse:
     """Return configured, cached, and compatibility model ids."""
     models: list[ModelResponse] = []
@@ -81,6 +84,9 @@ def build_models_list_response(
 
     for model in SUPPORTED_CLAUDE_MODELS:
         _append_unique_model(models, seen, model)
+
+    if visible_model_ids is not None:
+        models = [model for model in models if model.id in visible_model_ids]
 
     return ModelsListResponse(
         data=models,

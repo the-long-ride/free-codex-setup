@@ -19,7 +19,7 @@ _STRIPPED_CODEX_ENV_KEYS = frozenset(
         "OPENAI_ORG_ID",
         "OPENAI_ORGANIZATION",
         "CODEX_API_KEY",
-        _CODEX_AUTH_ENV_KEY,
+        "FCC_CODEX_API_KEY",
     }
 )
 
@@ -58,6 +58,7 @@ class CodexCliAdapter:
             api_url=config.api_url,
             allowed_dirs=config.allowed_dirs,
             workspace_path=config.workspace_path,
+            auth_token=config.auth_token,
         )
         resume_session_id = (
             request.session_id
@@ -140,6 +141,7 @@ class CodexCliAdapter:
         argv: Iterable[str],
         settings: Any,
         proxy_root_url: str,
+        auth_token: str = "",
     ) -> list[str]:
         """Return a Codex command with ephemeral FCC provider config."""
 
@@ -148,6 +150,7 @@ class CodexCliAdapter:
             *self._codex_config_args(
                 api_url=_ensure_v1_url(proxy_root_url),
                 model=getattr(settings, "model", None),
+                auth_token=auth_token,
             ),
             *argv,
         ]
@@ -162,7 +165,6 @@ class CodexCliAdapter:
         """Return a Codex environment that targets the local proxy provider."""
 
         env = _base_codex_env(base_env)
-        env[_CODEX_AUTH_ENV_KEY] = auth_token.strip() or "fcc-no-auth"
         return env
 
     def build_model_catalog_config_args(self, catalog_path: str) -> list[str]:
@@ -178,7 +180,6 @@ class CodexCliAdapter:
         base_env: Mapping[str, str],
     ) -> dict[str, str]:
         env = _base_codex_env(base_env)
-        env[_CODEX_AUTH_ENV_KEY] = auth_token.strip() or "fcc-no-auth"
         env["TERM"] = "dumb"
         env["PYTHONIOENCODING"] = "utf-8"
         return env
@@ -193,12 +194,13 @@ class CodexCliAdapter:
         api_url: str,
         allowed_dirs: list[str],
         workspace_path: str,
+        auth_token: str = "",
     ) -> list[str]:
         common_args = [
             "--json",
             "--skip-git-repo-check",
             "--dangerously-bypass-approvals-and-sandbox",
-            *self._codex_config_args(api_url=api_url),
+            *self._codex_config_args(api_url=api_url, auth_token=auth_token),
         ]
         if session_id and not session_id.startswith("pending_") and not fork_session:
             return [
@@ -223,7 +225,7 @@ class CodexCliAdapter:
         return cmd
 
     def _codex_config_args(
-        self, *, api_url: str, model: str | None = None
+        self, *, api_url: str, model: str | None = None, auth_token: str = ""
     ) -> list[str]:
         args = [
             "-c",
@@ -233,7 +235,7 @@ class CodexCliAdapter:
             "-c",
             _toml_assignment("model_providers.fcc.base_url", _ensure_v1_url(api_url)),
             "-c",
-            _toml_assignment("model_providers.fcc.env_key", _CODEX_AUTH_ENV_KEY),
+            _toml_assignment("model_providers.fcc.api_key", auth_token.strip() or "fcc-no-auth"),
             "-c",
             _toml_assignment("model_providers.fcc.wire_api", "responses"),
         ]
@@ -505,7 +507,7 @@ def _base_codex_env(base_env: Mapping[str, str]) -> dict[str, str]:
     return {
         key: value
         for key, value in base_env.items()
-        if key not in _STRIPPED_CODEX_ENV_KEYS and not key.startswith("OPENAI_")
+        if key not in _STRIPPED_CODEX_ENV_KEYS and not key.startswith("OPENAI_") and key != "FCC_CODEX_API_KEY"
     }
 
 

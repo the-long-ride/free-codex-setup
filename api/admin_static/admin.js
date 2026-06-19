@@ -1,10 +1,17 @@
 const state = {
   config: null,
+  access: null,
   fields: new Map(),
   localStatus: new Map(),
   modelOptions: [],
+  modelVisibilitySelection: new Set(),
+  modelVisibilityQuery: "",
+  modelVisibilityFilter: "all",
+  modelVisibilityPage: 1,
   activeView: "providers",
 };
+
+const MODEL_VISIBILITY_PAGE_SIZE = 50;
 
 const MASKED_SECRET = "********";
 const VIEW_GROUPS = [
@@ -28,6 +35,13 @@ const VIEW_GROUPS = [
     title: "Messaging",
     sections: ["messaging", "voice"],
     containerId: "messagingSections",
+  },
+  {
+    id: "access",
+    label: "Access",
+    title: "Access",
+    sections: [],
+    containerId: null,
   },
 ];
 
@@ -86,15 +100,56 @@ function statusClass(status) {
   return "neutral";
 }
 
-async function api(path, options = {}) {
+async function apiResponse(path, options = {}) {
   const response = await fetch(path, {
     headers: { "Content-Type": "application/json", ...(options.headers || {}) },
     ...options,
   });
+  if (response.status === 401) {
+    window.location.href = "/admin/login";
+    throw new Error("AUTH_REQUIRED");
+  }
   if (!response.ok) {
     throw new Error(`${response.status} ${response.statusText}`);
   }
+  return response;
+}
+
+async function api(path, options = {}) {
+  const response = await apiResponse(path, options);
   return response.json();
+}
+
+async function copyText(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  textarea.setSelectionRange(0, textarea.value.length);
+  const copied = document.execCommand("copy");
+  document.body.removeChild(textarea);
+  if (!copied) {
+    throw new Error("Clipboard copy is not available in this browser");
+  }
+}
+
+function triggerDownload(filename, content, mimeType) {
+  const blob = new Blob([content], { type: mimeType });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(link.href);
 }
 
 async function load() {
@@ -106,10 +161,22 @@ async function load() {
   renderProviders(config.provider_status);
   renderSections(config.sections, config.fields);
   byId("configPath").textContent = config.paths.managed;
+  await loadAccess();
   await validate(false);
   await refreshLocalStatus();
   updateDirtyState();
   showMessage("");
+}
+
+async function loadAccess() {
+  state.access = await api("/admin/api/access");
+  const explicitVisibleIds = state.access.visible_model_ids || [];
+  state.modelVisibilitySelection = new Set(
+    state.access.model_visibility_configured
+      ? explicitVisibleIds
+      : (state.access.available_models || []).map((model) => model.id),
+  );
+  renderAccess();
 }
 
 function renderNav() {
@@ -207,6 +274,7 @@ function updateProviderCard(providerId, status, label, metaText) {
 
 function renderSections(sections, fields) {
   VIEW_GROUPS.forEach((view) => {
+    if (!view.containerId) return;
     byId(view.containerId).innerHTML = "";
   });
 
@@ -219,6 +287,7 @@ function renderSections(sections, fields) {
   });
 
   VIEW_GROUPS.forEach((view) => {
+    if (!view.containerId) return;
     const container = byId(view.containerId);
     view.sections.forEach((sectionId) => {
       const section = sectionById.get(sectionId);
@@ -489,9 +558,160 @@ function showMessage(message, kind = "") {
   area.className = `message-area ${kind}`.trim();
 }
 
+function renderAccess() {
+  renderApiKeys();
+  renderModelVisibility();
+}
+
+function renderModelVisibility() {
+  const list = byId("modelVisibilityList");
+  const meta = byId("modelVisibilityMeta");
+  const pageLabel = byId("modelVisibilityPage");
+  const prevButton = byId("modelVisibilityPrevButton");
+  const nextButton = byId("modelVisibilityNextButton");
+  list.innerHTML = "";
+  const query = state.modelVisibilityQuery.trim().toLowerCase();
+  const models = (state.access.available_models || [])
+    .map((model) => ({
+      ...model,
+      checked: state.modelVisibilitySelection.has(model.id),
+    }))
+    .filter((model) => {
+      if (state.modelVisibilityFilter === "checked" && !model.checked) return false;
+      if (state.modelVisibilityFilter === "unchecked" && model.checked) return false;
+      if (!query) return true;
+      return (
+        model.display_name.toLowerCase().includes(query) ||
+        model.id.toLowerCase().includes(query)
+      );
+    })
+    .sort((left, right) => {
+      if (left.checked !== right.checked) return left.checked ? -1 : 1;
+      return left.display_name.localeCompare(right.display_name);
+    });
+
+  const totalPages = Math.max(1, Math.ceil(models.length / MODEL_VISIBILITY_PAGE_SIZE));
+  if (state.modelVisibilityPage > totalPages) {
+    state.modelVisibilityPage = totalPages;
+  }
+  const start = (state.modelVisibilityPage - 1) * MODEL_VISIBILITY_PAGE_SIZE;
+  const visibleModels = models.slice(start, start + MODEL_VISIBILITY_PAGE_SIZE);
+
+  meta.textContent = `${state.modelVisibilitySelection.size} selected · ${models.length} matched`;
+  pageLabel.textContent = `Page ${state.modelVisibilityPage} / ${totalPages}`;
+  prevButton.disabled = state.modelVisibilityPage <= 1;
+  nextButton.disabled = state.modelVisibilityPage >= totalPages;
+
+  for (const model of visibleModels) {
+    const row = document.createElement("label");
+    row.className = "model-row";
+    row.innerHTML = `
+      <input type="checkbox" data-model-id="${model.id}" />
+      <span class="model-copy">
+        <strong>${model.display_name}</strong>
+        <span class="field-source">${model.id}</span>
+      </span>
+    `;
+    const checkbox = row.querySelector("input");
+    checkbox.checked = model.checked;
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) {
+        state.modelVisibilitySelection.add(model.id);
+      } else {
+        state.modelVisibilitySelection.delete(model.id);
+      }
+      renderModelVisibility();
+    });
+    list.appendChild(row);
+  }
+}
+
+async function saveModelVisibility() {
+  await api("/admin/api/access/model-visibility", {
+    method: "POST",
+    body: JSON.stringify({ model_ids: Array.from(state.modelVisibilitySelection).sort() }),
+  });
+  await loadAccess();
+  showMessage("Model listing saved", "ok");
+}
+
+async function copyCodexConfig() {
+  const payload = await api("/admin/api/access/codex-config");
+  await copyText(payload.snippet);
+  showMessage("Copied Codex config; paste it into config.toml", "ok");
+}
+
+async function downloadModelCatalog() {
+  const response = await apiResponse("/admin/api/access/model-catalog");
+  const catalog = await response.json();
+  const blob = new Blob([`${JSON.stringify(catalog, null, 2)}\n`], {
+    type: "application/json",
+  });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = "codex-model-catalog.json";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(link.href);
+  showMessage("Downloaded Codex model catalog", "ok");
+}
+
+function uncheckAllModels() {
+  state.modelVisibilitySelection.clear();
+  renderModelVisibility();
+}
+
+function moveModelVisibilityPage(delta) {
+  state.modelVisibilityPage = Math.max(1, state.modelVisibilityPage + delta);
+  renderModelVisibility();
+}
+
+async function updatePassword() {
+  await api("/admin/api/access/password", {
+    method: "POST",
+    body: JSON.stringify({
+      current_password: byId("currentPassword").value,
+      new_password: byId("newPassword").value,
+    }),
+  });
+  byId("currentPassword").value = "";
+  byId("newPassword").value = "";
+  window.location.href = "/admin";
+}
+
 byId("validateButton").addEventListener("click", () => validate(true));
 byId("applyButton").addEventListener("click", apply);
+byId("copyCodexConfigButton").addEventListener("click", copyCodexConfig);
+byId("uncheckAllModelsButton").addEventListener("click", uncheckAllModels);
+byId("downloadModelCatalogButton").addEventListener("click", downloadModelCatalog);
+byId("saveModelVisibilityButton").addEventListener("click", saveModelVisibility);
+byId("changePasswordButton").addEventListener("click", updatePassword);
+byId("modelVisibilitySearch").addEventListener("input", (event) => {
+  state.modelVisibilityQuery = event.target.value;
+  state.modelVisibilityPage = 1;
+  renderModelVisibility();
+});
+byId("modelVisibilityFilter").addEventListener("change", (event) => {
+  state.modelVisibilityFilter = event.target.value;
+  state.modelVisibilityPage = 1;
+  renderModelVisibility();
+});
+byId("modelVisibilityPrevButton").addEventListener("click", () =>
+  moveModelVisibilityPage(-1),
+);
+byId("modelVisibilityNextButton").addEventListener("click", () =>
+  moveModelVisibilityPage(1),
+);
 
 load().catch((error) => {
   showMessage(error.message, "error");
 });
+
+
+
+
+
+
+
+

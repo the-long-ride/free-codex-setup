@@ -77,6 +77,7 @@ class ClientCliAdapter(Protocol):
         argv: Iterable[str],
         settings: Any,
         proxy_root_url: str,
+        auth_token: str = "",
     ) -> list[str]:
         """Build the wrapper subprocess command for a client CLI launch."""
         ...

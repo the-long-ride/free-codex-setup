@@ -57,6 +57,88 @@
               aria-label="Messaging configuration"
             ></div>
           </section>
+
+          <section id="view-access" class="admin-view" data-view="access" hidden>
+            <section class="settings-section">
+              <div class="section-heading">
+                <div>
+                  <h3>Admin Password</h3>
+                  <p>Cookie sessions last up to 9 hours.</p>
+                </div>
+              </div>
+              <div class="field-grid">
+                <div class="field">
+                  <label for="currentPassword"><span>Current Password</span></label>
+                  <input id="currentPassword" type="password" autocomplete="current-password" />
+                </div>
+                <div class="field">
+                  <label for="newPassword"><span>New Password</span></label>
+                  <input id="newPassword" type="password" autocomplete="new-password" />
+                </div>
+              </div>
+              <div class="inline-actions">
+                <button id="changePasswordButton" class="primary-button" type="button">
+                  Change Password
+                </button>
+              </div>
+            </section>
+
+            <section class="settings-section">
+              <div class="section-heading">
+                <div>
+                  <h3>Codex Config</h3>
+                  <p>Copy a config.toml snippet that authenticates with the server env key.</p>
+                </div>
+              </div>
+              <div class="inline-actions">
+                <button id="copyCodexConfigButton" class="secondary-button" type="button">
+                  Copy config for config.toml
+                </button>
+              </div>
+            </section>
+
+            <section class="settings-section">
+              <div class="section-heading">
+                <div>
+                  <h3>Model Listing</h3>
+                  <p>Checked models are listed and allowed for client use.</p>
+                </div>
+              </div>
+              <div class="model-list-toolbar">
+                <input
+                  id="modelVisibilitySearch"
+                  class="search-input"
+                  type="search"
+                  placeholder="Search model name or id"
+                />
+                <select id="modelVisibilityFilter" class="search-input">
+                  <option value="all">All Models</option>
+                  <option value="checked">Checked Only</option>
+                  <option value="unchecked">Unchecked Only</option>
+                </select>
+                <button id="uncheckAllModelsButton" class="secondary-button" type="button">
+                  Uncheck All
+                </button>
+                <button id="downloadModelCatalogButton" class="secondary-button" type="button">
+                  Download model catalog for Codex
+                </button>
+                <button id="saveModelVisibilityButton" class="primary-button" type="button">
+                  Save Model Listing
+                </button>
+              </div>
+              <div id="modelVisibilityMeta" class="list-meta"></div>
+              <div id="modelVisibilityList" class="model-visibility-list"></div>
+              <div class="model-pagination">
+                <button id="modelVisibilityPrevButton" class="secondary-button" type="button">
+                  Previous
+                </button>
+                <span id="modelVisibilityPage" class="list-meta"></span>
+                <button id="modelVisibilityNextButton" class="secondary-button" type="button">
+                  Next
+                </button>
+              </div>
+            </section>
+          </section>
         </div>
       </main>
 
@@ -75,3 +157,5 @@
     <script src="/admin/assets/admin.js"></script>
   </body>
 </html>
+
+

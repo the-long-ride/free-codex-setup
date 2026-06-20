@@ -224,5 +224,7 @@ def test_add_repo_scripts_to_path_ps1_updates_user_path_and_current_shell() -> N
 
     assert '[Environment]::GetEnvironmentVariable("Path", "User")' in text
     assert '[Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")' in text
-    assert "$env:Path = if ([string]::IsNullOrWhiteSpace($env:Path)) {" in text
+    assert '$newEntries = @($scriptsDir) + $filteredEntries' in text
+    assert '$_ -ne $scriptsDir' in text
+    assert '$env:Path = if ([string]::IsNullOrWhiteSpace($env:Path)) {' in text
     assert "Open a new terminal, then run: free-codex" in text

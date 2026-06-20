@@ -123,6 +123,7 @@ class OpenAIChatTransport(BaseProvider):
             return True
 
         async def create_stream(create_body: dict[str, Any]) -> Any:
+            self._set_request_api_key(api_key)
             client = (
                 self._client
                 if api_key == self._api_key
@@ -130,7 +131,9 @@ class OpenAIChatTransport(BaseProvider):
             )
             return await client.chat.completions.create(**create_body, stream=True)
 
-        execute_kwargs: dict[str, Any] = {}
+        execute_kwargs: dict[str, Any] = {
+            "max_retries": self._upstream_max_retries(),
+        }
         if self._uses_api_key_failover():
             execute_kwargs["before_retry"] = before_retry
 

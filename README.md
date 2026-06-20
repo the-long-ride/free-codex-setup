@@ -8,7 +8,7 @@
 
 #### Windows PowerShell
 
-Run the PATH setup script once from this repo:
+Run the PATH setup script once from this repo. It puts this checkout's `scripts` directory at the front of your user PATH so `free-codex` resolves to the latest source wrapper:
 
 ```powershell
 .\scripts\add-repo-scripts-to-path.ps1

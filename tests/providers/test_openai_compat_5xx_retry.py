@@ -369,11 +369,11 @@ async def test_openai_chat_failover_mode_retries_retryable_5xx_with_next_key(
 
 
 @pytest.mark.asyncio
-async def test_openai_chat_failover_mode_preserves_5xx_retry_budget():
+async def test_openai_chat_failover_mode_retries_once_per_configured_key():
     GlobalRateLimiter.reset_instance()
     try:
         config = ProviderConfig(
-            api_key="key-a,key-b",
+            api_key="key-a,key-b,key-c",
             api_key_rotation_mode=ApiKeyRotationMode.FAILOVER_ON_LIMIT,
             base_url="https://test.api.nvidia.com/v1",
             rate_limit=100,
@@ -402,7 +402,6 @@ async def test_openai_chat_failover_mode_preserves_5xx_retry_budget():
             side_effect=[
                 _internal_5xx(500),
                 _internal_5xx(500),
-                _internal_5xx(500),
                 mock_stream(),
             ]
         )
@@ -414,7 +413,7 @@ async def test_openai_chat_failover_mode_preserves_5xx_retry_budget():
         ):
             events = [e async for e in provider.stream_response(req)]
 
-        assert fake_create.await_count == 4
+        assert fake_create.await_count == 3
         assert any("Recovered" in event for event in events)
     finally:
         GlobalRateLimiter.reset_instance()

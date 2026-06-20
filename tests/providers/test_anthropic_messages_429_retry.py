@@ -253,3 +253,64 @@ async def test_non_retryable_4xx_http_error_not_retried(provider_config):
             )
     finally:
         GlobalRateLimiter.reset_instance()
+
+
+@pytest.mark.asyncio
+async def test_native_stream_failover_mode_retries_once_per_configured_key(
+    provider_config,
+):
+    """Failover mode tries each configured key once before surfacing retryable 5xx."""
+    GlobalRateLimiter.reset_instance()
+    try:
+
+        @asynccontextmanager
+        async def _slot():
+            yield
+
+        with patch(
+            "providers.transports.anthropic_messages.transport.GlobalRateLimiter"
+        ) as mock_gl:
+            instance = mock_gl.get_scoped_instance.return_value
+            real = GlobalRateLimiter(
+                rate_limit=100,
+                rate_window=60,
+                max_concurrency=5,
+            )
+            instance.wait_if_blocked = real.wait_if_blocked
+            instance.execute_with_retry = real.execute_with_retry
+            instance.set_blocked = real.set_blocked
+            instance.concurrency_slot.side_effect = _slot
+
+            failover_config = provider_config.model_copy(
+                update={
+                    "api_key": "key-a,key-b,key-c",
+                    "api_key_rotation_mode": "failover_on_limit",
+                }
+            )
+            provider = NativeProvider(failover_config)
+            req = MockRequest()
+
+            bad = FakeResponse(status_code=500, text="upstream error")
+
+            with (
+                patch.object(
+                    provider._client, "build_request", return_value=MagicMock()
+                ),
+                patch.object(
+                    provider._client,
+                    "send",
+                    new_callable=AsyncMock,
+                    return_value=bad,
+                ) as mock_send,
+                patch("asyncio.sleep", new_callable=AsyncMock),
+            ):
+                events = [e async for e in provider.stream_response(req)]
+
+            assert mock_send.await_count == 3
+            assert bad.is_closed
+            assert_canonical_stream_error_envelope(
+                events,
+                user_message_substr="Provider API request failed",
+            )
+    finally:
+        GlobalRateLimiter.reset_instance()

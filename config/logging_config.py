@@ -9,6 +9,7 @@ included at top level for easy grep/filter.
 import json
 import logging
 import re
+import sys
 import threading
 from pathlib import Path
 
@@ -45,6 +46,29 @@ def _redact_sensitive_substrings(message: str) -> str:
     """Remove obvious API tokens and secrets before JSON log line emission."""
     text = _TELEGRAM_BOT_RE.sub(r"\1bot<redacted>\3", message)
     return _AUTH_BEARER_RE.sub(r"\1<redacted>", text)
+
+
+def _console_format(record) -> str:
+    """Render concise console lines while surfacing trace context."""
+    extra = record.get("extra", {})
+    parts = [_redact_sensitive_substrings(str(record["message"]))]
+
+    trace_payload = extra.get(_TRACE_PAYLOAD_BINDING)
+
+    request_id = extra.get("request_id")
+    if request_id is None and isinstance(trace_payload, dict):
+        request_id = trace_payload.get("request_id")
+    if request_id:
+        parts.append(f"request_id={request_id}")
+
+    if isinstance(trace_payload, dict):
+        for key in ("provider", "event", "credential_preview"):
+            value = trace_payload.get(key)
+            if value is not None:
+                parts.append(f"{key}={value}")
+
+    record["_console"] = " ".join(part for part in parts if part)
+    return "<level>{level}</level>: <green>{time:HH:mm:ss}</green> {_console}\n"
 
 
 def _serialize_with_context(record) -> str:
@@ -138,6 +162,12 @@ def configure_logging(
         mode="a",
         rotation="50 MB",
         enqueue=True,
+    )
+    logger.add(
+        sys.stderr,
+        level="INFO",
+        format=_console_format,
+        colorize=True,
     )
 
     # Intercept stdlib logging: route all root logger output to loguru

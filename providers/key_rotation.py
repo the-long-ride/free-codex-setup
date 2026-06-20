@@ -65,6 +65,13 @@ class ApiKeyRotationPool:
             self._next_index = (self._next_index + 1) % len(self._keys)
             return key
 
+    def peek_key_for_new_request(self) -> str:
+        """Return the next request key without advancing round-robin state."""
+        if self._mode == ApiKeyRotationMode.FAILOVER_ON_LIMIT:
+            return self._keys[0]
+        with self._lock:
+            return self._keys[self._next_index]
+
     def next_key_after_limit(self, current_key: str) -> str | None:
         """Return a failover key after ``current_key`` hits a retryable upstream error."""
         try:

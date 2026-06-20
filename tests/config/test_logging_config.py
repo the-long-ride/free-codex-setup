@@ -7,6 +7,7 @@ from pathlib import Path
 from loguru import logger
 
 from config.logging_config import configure_logging
+from core.trace import trace_event
 
 
 def test_configure_logging_creates_parent_directories(tmp_path) -> None:
@@ -101,3 +102,21 @@ def test_httpx_resets_to_notset_when_verbose_third_party(tmp_path) -> None:
     log_file = str(tmp_path / "verbose.log")
     configure_logging(log_file, force=True, verbose_third_party=True)
     assert logging.getLogger("httpx").level == logging.NOTSET
+
+
+def test_trace_rows_surface_key_preview_in_console(tmp_path, capsys) -> None:
+    log_file = str(tmp_path / "console.log")
+    configure_logging(log_file, force=True)
+    trace_event(
+        stage="provider",
+        event="provider.request.sent",
+        source="provider",
+        provider="nvidia_nim",
+        credential_preview="abcde....123456",
+        request_id="req_console",
+    )
+    logger.complete()
+    captured = capsys.readouterr()
+    assert "credential_preview=abcde....123456" in captured.err
+    assert "request_id=req_console" in captured.err
+    assert "provider=nvidia_nim" in captured.err

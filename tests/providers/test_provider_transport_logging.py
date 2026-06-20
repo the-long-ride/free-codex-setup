@@ -194,6 +194,8 @@ async def test_native_stream_failure_logs_exclude_exception_str_by_default(
     assert "SECRET_DETAIL" not in messages
     assert "exc_type=RuntimeError" in messages
     assert "http_status=None" in messages
+    assert "credential_preview=test-....st-key" in messages
+    assert "credential_preview=test-key" not in messages
 
 
 @pytest.mark.asyncio
@@ -229,6 +231,7 @@ async def test_openai_compat_stream_failure_default_logs_exclude_exception_str(c
     messages = " | ".join(r.getMessage() for r in caplog.records)
     assert "SECRET_OPENAI_COMPAT" not in messages
     assert "exc_type=RuntimeError" in messages
+    assert "credential_preview=k....k" in messages
 
 
 @pytest.mark.asyncio
@@ -263,3 +266,4 @@ async def test_openai_compat_stream_failure_respects_verbose_flag(caplog):
 
     messages = " | ".join(r.getMessage() for r in caplog.records)
     assert "SECRET_OPENAI_COMPAT" in messages
+    assert "credential_preview=k....k" in messages

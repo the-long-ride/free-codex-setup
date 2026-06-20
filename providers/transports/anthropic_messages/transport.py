@@ -194,6 +194,7 @@ class AnthropicMessagesTransport(BaseProvider):
     async def _validated_stream_send_with_key(
         self, body: dict, *, req_tag: str, api_key: str
     ) -> httpx.Response:
+        self._set_request_api_key(api_key)
         with self._using_api_key(api_key):
             return await self._validated_stream_send(body, req_tag=req_tag)
 
@@ -225,6 +226,7 @@ class AnthropicMessagesTransport(BaseProvider):
             body,
             req_tag=req_tag,
             api_key=api_key,
+            max_retries=self._upstream_max_retries(),
             before_retry=before_retry,
         )
 

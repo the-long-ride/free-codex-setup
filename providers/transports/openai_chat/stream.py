@@ -83,17 +83,6 @@ class OpenAIChatStreamRunner:
         thinking_enabled = self._transport._is_thinking_enabled(
             self._request, self._thinking_enabled
         )
-        trace_event(
-            stage="provider",
-            event="provider.request.sent",
-            source="provider",
-            provider=tag,
-            gateway_model=self._request.model,
-            downstream_model=body.get("model"),
-            message_count=len(body.get("messages", [])),
-            tool_count=len(body.get("tools", [])),
-            body=provider_chat_body_snapshot(body),
-        )
 
         yield sse.message_start()
 
@@ -107,9 +96,24 @@ class OpenAIChatStreamRunner:
         async with self._transport._global_rate_limiter.concurrency_slot():
             while True:
                 stream_opened = False
+                self._transport._set_request_api_key(
+                    self._transport._peek_key_for_new_request()
+                )
                 try:
                     stream, body = await self._transport._create_stream(body)
                     stream_opened = True
+                    trace_event(
+                        stage="provider",
+                        event="provider.request.sent",
+                        source="provider",
+                        provider=tag,
+                        gateway_model=self._request.model,
+                        downstream_model=body.get("model"),
+                        message_count=len(body.get("messages", [])),
+                        tool_count=len(body.get("tools", [])),
+                        body=provider_chat_body_snapshot(body),
+                        **self._transport._request_log_fields(),
+                    )
                     tool_argument_aliases = self._transport._tool_argument_aliases(body)
                     async for chunk in stream:
                         if getattr(chunk, "usage", None):
@@ -251,6 +255,7 @@ class OpenAIChatStreamRunner:
                                 provider=tag,
                                 request_id=self._request_id,
                                 exc_type=type(recovery_error).__name__,
+                                **self._transport._request_log_fields(),
                             )
                             recovery_events = None
                         if recovery_events is not None:
@@ -278,6 +283,7 @@ class OpenAIChatStreamRunner:
                                 rate_limiter=self._transport._global_rate_limiter,
                             )
                         ).__name__,
+                        **self._transport._request_log_fields(),
                     )
                     if not decision.committed and decision.has_buffered:
                         for event in recovery_session.flush():
@@ -365,6 +371,7 @@ class OpenAIChatStreamRunner:
             finish_reason=(None if finish_reason is None else str(finish_reason)),
             output_tokens=output_tokens,
             prompt_tokens_estimate=self._input_tokens,
+            **self._transport._request_log_fields(),
         )
         for event in hold_event(
             sse.message_delta(map_stop_reason(finish_reason), output_tokens)

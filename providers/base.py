@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from config.constants import HTTP_CONNECT_TIMEOUT_DEFAULT
 from providers.key_rotation import ApiKeyRotationMode, ApiKeyRotationPool
+from providers.rate_limit import DEFAULT_UPSTREAM_MAX_RETRIES
 from providers.model_listing import ProviderModelInfo, model_infos_from_ids
 
 
@@ -44,6 +45,10 @@ class BaseProvider(ABC):
             f"{type(self).__name__}_api_key_context",
             default=None,
         )
+        self._request_api_key_preview_context: ContextVar[str | None] = ContextVar(
+            f"{type(self).__name__}_request_api_key_preview_context",
+            default=None,
+        )
         self._api_key_pool: ApiKeyRotationPool | None = None
         if config.api_key.strip():
             self._api_key_pool = ApiKeyRotationPool.shared(
@@ -57,6 +62,11 @@ class BaseProvider(ABC):
             return self._config.api_key
         return self._api_key_pool.key_for_new_request()
 
+    def _peek_key_for_new_request(self) -> str:
+        if self._api_key_pool is None:
+            return self._config.api_key
+        return self._api_key_pool.peek_key_for_new_request()
+
     def _next_key_after_limit(self, current_key: str) -> str | None:
         if self._api_key_pool is None:
             return None
@@ -64,6 +74,11 @@ class BaseProvider(ABC):
 
     def _uses_api_key_failover(self) -> bool:
         return self._api_key_pool is not None and self._api_key_pool.size > 1
+
+    def _upstream_max_retries(self) -> int:
+        if self._api_key_pool is None or self._api_key_pool.size <= 1:
+            return DEFAULT_UPSTREAM_MAX_RETRIES
+        return self._api_key_pool.size - 1
 
     def _current_api_key(self) -> str:
         key = self._api_key_context.get()
@@ -78,6 +93,25 @@ class BaseProvider(ABC):
             yield
         finally:
             self._api_key_context.reset(token)
+
+    def _mask_api_key(self, key: str) -> str | None:
+        value = key.strip()
+        if not value:
+            return None
+        return f"{value[:5]}....{value[-6:]}"
+
+    def _set_request_api_key(self, key: str) -> None:
+        preview = self._mask_api_key(key)
+        if preview is not None:
+            self._request_api_key_preview_context.set(preview)
+
+    def _request_log_fields(self) -> dict[str, str]:
+        preview = self._request_api_key_preview_context.get()
+        if preview:
+            return {"credential_preview": preview}
+        active_key = self._api_key_context.get()
+        fallback = self._mask_api_key(active_key) if active_key is not None else None
+        return {"credential_preview": fallback} if fallback else {}
 
     def _is_thinking_enabled(
         self, request: Any, thinking_enabled: bool | None = None
@@ -146,19 +180,26 @@ class BaseProvider(ABC):
             request_id=request_id,
             exc_type=type(error).__name__,
             http_status=http_status,
+            **self._request_log_fields(),
         )
 
         if self._config.log_api_error_tracebacks:
             logger.error(
-                "{}_ERROR:{} {}: {}", tag, req_tag, type(error).__name__, error
+                "{}_ERROR:{} {}: {} credential_preview={}",
+                tag,
+                req_tag,
+                type(error).__name__,
+                error,
+                self._request_log_fields().get("credential_preview", "<none>"),
             )
             return
         logger.error(
-            "{}_ERROR:{} exc_type={} http_status={}",
+            "{}_ERROR:{} exc_type={} http_status={} credential_preview={}",
             tag,
             req_tag,
             type(error).__name__,
             http_status,
+            self._request_log_fields().get("credential_preview", "<none>"),
         )
 
     @abstractmethod

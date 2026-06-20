@@ -79,18 +79,6 @@ class AnthropicMessagesStreamRunner:
             self._request, self._thinking_enabled
         )
 
-        trace_event(
-            stage="provider",
-            event="provider.request.sent",
-            source="provider",
-            provider=tag,
-            gateway_model=self._request.model,
-            downstream_model=body.get("model"),
-            message_count=len(body.get("messages", [])),
-            tool_count=len(body.get("tools", [])),
-            body=provider_native_messages_body_snapshot(body),
-        )
-
         response: httpx.Response | None = None
         sent_any_event = False
         state = self._transport._new_stream_state(
@@ -113,6 +101,18 @@ class AnthropicMessagesStreamRunner:
                         )
                     )
                     stream_opened = True
+                    trace_event(
+                        stage="provider",
+                        event="provider.request.sent",
+                        source="provider",
+                        provider=tag,
+                        gateway_model=self._request.model,
+                        downstream_model=body.get("model"),
+                        message_count=len(body.get("messages", [])),
+                        tool_count=len(body.get("tools", [])),
+                        body=provider_native_messages_body_snapshot(body),
+                        **self._transport._request_log_fields(),
+                    )
 
                     chunk_count = 0
                     chunk_bytes = 0
@@ -142,6 +142,7 @@ class AnthropicMessagesStreamRunner:
                         gateway_model=self._request.model,
                         sse_chunks_out=chunk_count,
                         sse_bytes_out=chunk_bytes,
+                        **self._transport._request_log_fields(),
                     )
                     for event in recovery_session.flush():
                         sent_any_event = True
@@ -192,6 +193,7 @@ class AnthropicMessagesStreamRunner:
                                 provider=tag,
                                 request_id=self._request_id,
                                 exc_type=type(recovery_error).__name__,
+                                **self._transport._request_log_fields(),
                             )
                             recovery_events = None
                         if recovery_events is not None:
@@ -225,6 +227,7 @@ class AnthropicMessagesStreamRunner:
                             or decision.committed
                             or decision.has_buffered
                         ),
+                        **self._transport._request_log_fields(),
                     )
                     if decision.committed or decision.has_buffered:
                         if not decision.committed:

@@ -10,14 +10,20 @@ if (-not [string]::IsNullOrWhiteSpace($userPath)) {
     $entries = $userPath -split [regex]::Escape([string] $separator)
 }
 
+$filteredEntries = @(
+    $entries | Where-Object {
+        -not [string]::IsNullOrWhiteSpace($_) -and $_ -ne $scriptsDir
+    }
+)
+$newEntries = @($scriptsDir) + $filteredEntries
+$newUserPath = $newEntries -join $separator
+[Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")
+
 if ($entries -contains $scriptsDir) {
-    Write-Host "User PATH already contains $scriptsDir"
+    Write-Host "Moved $scriptsDir to the front of the user PATH."
 }
 else {
-    $newEntries = @($entries + $scriptsDir | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-    $newUserPath = $newEntries -join $separator
-    [Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")
-    Write-Host "Added $scriptsDir to the user PATH."
+    Write-Host "Added $scriptsDir to the front of the user PATH."
 }
 
 if (($env:Path -split [regex]::Escape([string] $separator)) -notcontains $scriptsDir) {

@@ -16,7 +16,7 @@ from providers.error_mapping import (
     map_error,
     user_visible_message_for_mapped_provider_error,
 )
-from providers.key_rotation import is_limit_error
+from providers.key_rotation import is_retryable_upstream_error
 from providers.model_listing import extract_openai_model_ids
 from providers.rate_limit import GlobalRateLimiter
 
@@ -114,11 +114,11 @@ class OpenAIChatTransport(BaseProvider):
 
         def before_retry(error: Exception, _attempt: int, _max_attempts: int) -> bool:
             nonlocal api_key
-            if not is_limit_error(error):
+            if not is_retryable_upstream_error(error):
                 return False
             next_key = self._next_key_after_limit(api_key)
             if next_key is None:
-                raise error
+                return False
             api_key = next_key
             return True
 

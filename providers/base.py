@@ -46,7 +46,8 @@ class BaseProvider(ABC):
         )
         self._api_key_pool: ApiKeyRotationPool | None = None
         if config.api_key.strip():
-            self._api_key_pool = ApiKeyRotationPool(
+            self._api_key_pool = ApiKeyRotationPool.shared(
+                type(self).__name__,
                 config.api_key,
                 config.api_key_rotation_mode,
             )
@@ -59,15 +60,10 @@ class BaseProvider(ABC):
     def _next_key_after_limit(self, current_key: str) -> str | None:
         if self._api_key_pool is None:
             return None
-        if self._api_key_pool.mode != ApiKeyRotationMode.FAILOVER_ON_LIMIT:
-            return None
         return self._api_key_pool.next_key_after_limit(current_key)
 
     def _uses_api_key_failover(self) -> bool:
-        return (
-            self._api_key_pool is not None
-            and self._api_key_pool.mode == ApiKeyRotationMode.FAILOVER_ON_LIMIT
-        )
+        return self._api_key_pool is not None and self._api_key_pool.size > 1
 
     def _current_api_key(self) -> str:
         key = self._api_key_context.get()
@@ -187,7 +183,5 @@ class BaseProvider(ABC):
         thinking_enabled: bool | None = None,
     ) -> AsyncIterator[str]:
         """Stream response in Anthropic SSE format."""
-        # Typing: abstract async generators need a yield for AsyncIterator[str]
-        # inference; this branch is never executed.
         if False:
             yield ""

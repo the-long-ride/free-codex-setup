@@ -4,12 +4,20 @@ from __future__ import annotations
 
 import httpx
 import openai
+import pytest
 
 from providers.key_rotation import (
     ApiKeyRotationMode,
     ApiKeyRotationPool,
     is_limit_error,
 )
+
+
+@pytest.fixture(autouse=True)
+def reset_shared_pools() -> None:
+    ApiKeyRotationPool.reset_shared()
+    yield
+    ApiKeyRotationPool.reset_shared()
 
 
 def test_round_robin_mode_cycles_keys_per_request() -> None:
@@ -22,6 +30,22 @@ def test_round_robin_mode_cycles_keys_per_request() -> None:
         "key-a",
         "key-b",
     ]
+
+
+def test_shared_round_robin_pool_advances_across_instances() -> None:
+    first = ApiKeyRotationPool.shared(
+        "test-provider",
+        "key-a,key-b,key-c",
+        ApiKeyRotationMode.ROUND_ROBIN,
+    )
+    second = ApiKeyRotationPool.shared(
+        "test-provider",
+        "key-a,key-b,key-c",
+        ApiKeyRotationMode.ROUND_ROBIN,
+    )
+
+    assert [first.key_for_new_request() for _ in range(2)] == ["key-a", "key-b"]
+    assert [second.key_for_new_request() for _ in range(2)] == ["key-c", "key-a"]
 
 
 def test_failover_mode_keeps_first_key_until_limit_error() -> None:

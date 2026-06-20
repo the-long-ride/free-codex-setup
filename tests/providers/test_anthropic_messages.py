@@ -130,6 +130,7 @@ def mock_rate_limiter():
         instance = mock.get_scoped_instance.return_value
 
         async def _passthrough(fn, *args, **kwargs):
+            kwargs.pop("before_retry", None)
             return await fn(*args, **kwargs)
 
         instance.execute_with_retry = AsyncMock(side_effect=_passthrough)

@@ -11,6 +11,7 @@ import threading
 import time
 import webbrowser
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -50,6 +51,25 @@ CODEX_AUTH_FILENAME = "auth.json"
 CODEX_WRAPPER_STATE_FILENAME = "codex-wrapper-state.json"
 CODEX_WRAPPER_CONFIG_BACKUP_FILENAME = "codex-config.backup.toml"
 CODEX_WRAPPER_AUTH_BACKUP_FILENAME = "codex-auth.backup.json"
+UVICORN_LOG_DATEFMT = "%H:%M:%S"
+
+
+def _build_uvicorn_log_config() -> dict[str, object]:
+    """Return Uvicorn logging config with local-time prefixes on console output."""
+
+    log_config = deepcopy(uvicorn.config.LOGGING_CONFIG)
+    formatters = log_config.get("formatters")
+    if not isinstance(formatters, dict):
+        return log_config
+
+    for formatter_name in ("default", "access"):
+        formatter = formatters.get(formatter_name)
+        if not isinstance(formatter, dict):
+            continue
+        formatter["fmt"] = "%(levelprefix)s %(asctime)s %(message)s"
+        formatter["datefmt"] = UVICORN_LOG_DATEFMT
+
+    return log_config
 
 
 def _load_env_template() -> str:
@@ -135,6 +155,7 @@ def free_codex(argv: Sequence[str] | None = None) -> None:
 
     raise SystemExit(return_code)
 
+
 def _admin_browser_open_enabled() -> bool:
     """Whether to open /admin when the server becomes reachable (FCC_OPEN_BROWSER)."""
 
@@ -184,6 +205,7 @@ def _run_supervised_server(settings: Settings, *, open_admin_browser: bool) -> b
         host=settings.host,
         port=settings.port,
         log_level="debug",
+        log_config=_build_uvicorn_log_config(),
         timeout_graceful_shutdown=SERVER_GRACEFUL_SHUTDOWN_SECONDS,
     )
     server = uvicorn.Server(config)
@@ -426,7 +448,3 @@ def _fetch_proxy_models_response(
     if not isinstance(payload, dict):
         raise ValueError("model list response was not a JSON object")
     return payload
-
-
-
-

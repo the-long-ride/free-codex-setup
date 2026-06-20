@@ -1290,6 +1290,7 @@ def provider_config_status(
                 "status": "configured" if configured else "missing_key",
                 "label": "Configured" if configured else "Missing key",
                 "credential_env": descriptor.credential_env,
+                "key_count": _comma_separated_key_count(value) if configured else 0,
             }
         )
     return statuses
@@ -1304,6 +1305,12 @@ def _value_for_settings_attr(
     return ""
 
 
+def _comma_separated_key_count(value: str) -> int:
+    """Return the number of non-empty comma-separated credential entries."""
+
+    return sum(1 for part in value.split(",") if part.strip())
+
+
 def env_keys() -> frozenset[str]:
     """Return env keys owned by the admin manifest."""
 
@@ -1314,3 +1321,4 @@ def fields_with_attrs() -> Iterable[ConfigFieldSpec]:
     """Yield fields that validate through Settings."""
 
     return (field for field in FIELDS if field.settings_attr is not None)
+

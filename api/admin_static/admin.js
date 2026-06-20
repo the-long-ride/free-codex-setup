@@ -99,6 +99,12 @@ function statusClass(status) {
   if (["offline", "error"].includes(status)) return "error";
   return "neutral";
 }
+function providerKeyCountLabel(provider) {
+  if (provider.kind !== "remote" || !(provider.key_count > 0)) {
+    return "";
+  }
+  return `${provider.key_count} key${provider.key_count === 1 ? "" : "s"}`;
+}
 
 async function apiResponse(path, options = {}) {
   const response = await fetch(path, {
@@ -238,10 +244,22 @@ function renderProviders(providerStatus) {
     title.className = "provider-title";
     title.innerHTML = `<strong>${providerName(provider.provider_id)}</strong>`;
 
+    const statusGroup = document.createElement("div");
+    statusGroup.className = "provider-status";
+
+    const keyCount = providerKeyCountLabel(provider);
+    if (keyCount) {
+      const keyCountLabel = document.createElement("span");
+      keyCountLabel.className = "provider-key-count";
+      keyCountLabel.textContent = keyCount;
+      statusGroup.appendChild(keyCountLabel);
+    }
+
     const pill = document.createElement("span");
     pill.className = `status-pill ${statusClass(provider.status)}`;
     pill.textContent = provider.label;
-    title.appendChild(pill);
+    statusGroup.appendChild(pill);
+    title.appendChild(statusGroup);
 
     const meta = document.createElement("div");
     meta.className = "provider-meta";
@@ -707,11 +725,4 @@ byId("modelVisibilityNextButton").addEventListener("click", () =>
 load().catch((error) => {
   showMessage(error.message, "error");
 });
-
-
-
-
-
-
-
 

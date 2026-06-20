@@ -356,6 +356,24 @@ def test_admin_config_masks_secrets_and_exposes_manifest(monkeypatch, tmp_path):
     assert rotation_field["options"] == ["round_robin", "failover_on_limit"]
 
 
+def test_admin_config_reports_remote_provider_key_counts(monkeypatch, tmp_path):
+    _set_home(monkeypatch, tmp_path)
+    _clear_process_config(monkeypatch)
+    monkeypatch.setenv("NVIDIA_NIM_API_KEY", "key-a, key-b ,, key-c")
+    get_cached_settings.cache_clear()
+    app = create_app(lifespan_enabled=False)
+
+    response = _admin_client(app).get("/admin/api/config")
+
+    assert response.status_code == 200
+    body = response.json()
+    provider_status = {
+        provider["provider_id"]: provider for provider in body["provider_status"]
+    }
+    assert provider_status["nvidia_nim"]["key_count"] == 3
+    assert "key_count" not in provider_status["lmstudio"]
+
+
 def test_admin_config_preserves_managed_env_source_contract(monkeypatch, tmp_path):
     _set_home(monkeypatch, tmp_path)
     _clear_process_config(monkeypatch)

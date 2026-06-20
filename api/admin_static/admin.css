@@ -324,6 +324,20 @@ textarea {
   gap: 8px;
 }
 
+.provider-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.provider-key-count {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
 .provider-title strong {
   font-size: 14px;
 }
@@ -628,3 +642,4 @@ textarea {
     flex: 1;
   }
 }
+
